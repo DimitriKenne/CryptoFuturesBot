@@ -1,0 +1,54 @@
+# Environment variables
+.env
+
+# Virtual environment
+.venv/
+env/
+venv/
+*.pyenv/
+
+# Python compiled files
+__pycache__/
+*.pyc
+*.pyd
+*.so
+
+# Logs
+logs/
+*.log
+
+# Data directories (generated, can be large)
+data/raw/
+data/processed/
+data/labeled/
+
+# Model artifacts (generated, can be large)
+models/trained_models/
+*.pkl
+*.keras
+*.h5 # For Keras models
+*.tf # For TensorFlow SavedModel format
+
+# Results directories (generated, can be large)
+results/
+
+# Jupyter Notebook files (if you use them, exclude outputs or entire notebooks)
+.ipynb_checkpoints/
+*.ipynb  # Uncomment this line if you want to exclude all notebooks.
+         # If you have specific notebooks you want to share (e.g., for analysis),
+         # you can keep them and remove this line, or list specific ones to *not* ignore.
+
+# Operating System files
+.DS_Store
+Thumbs.db
+
+# IDE specific files
+.idea/          # PyCharm
+.vscode/        # VS Code
+*.sublime-project
+*.sublime-workspace
+
+# Temporary files
+*.tmp
+*.bak
+*~

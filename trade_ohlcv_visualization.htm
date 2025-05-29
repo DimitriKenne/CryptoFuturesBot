@@ -1,0 +1,412 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Trade and OHLCV Analysis</title>
+    <script src="https://unpkg.com/lightweight-charts@4.1.0/dist/lightweight-charts.standalone.production.js"></script>
+
+    <script src="https://cdn.tailwindcss.com"></script>
+    <style>
+        body {
+            font-family: "Inter", sans-serif;
+            background-color: #f4f4f4;
+            color: #333;
+            line-height: 1.6;
+            padding: 20px;
+        }
+        .container {
+            max-width: 1200px;
+            margin: 0 auto;
+            background-color: #fff;
+            padding: 20px;
+            border-radius: 8px;
+            box-shadow: 0 2px 4px rgba(0, 0, 0, 0.1);
+        }
+        h1 {
+            text-align: center;
+            color: #333;
+            margin-bottom: 20px;
+        }
+        #chartContainer {
+            position: relative;
+            height: 600px; /* Increased height for better visibility */
+            margin-bottom: 20px;
+            border: 1px solid #ddd; /* Add border to see container bounds */
+            background-color: #e0e0e0; /* Light gray background to see if container is there */
+            display: flex; /* Use flexbox to center content for debugging */
+            align-items: center;
+            justify-content: center;
+            font-size: 1.2rem;
+            color: #666;
+        }
+        #tradeDetails {
+            margin-top: 20px;
+            padding: 15px;
+            background-color: #e9e9e9;
+            border-radius: 4px;
+            font-family: monospace;
+            white-space: pre-wrap; /* Preserve formatting */
+            word-break: break-all; /* Prevent overflow */
+            overflow-x: auto; /* Add horizontal scroll if needed */
+        }
+         /* Custom tooltip styling for Lightweight Charts */
+        .chart-tooltip {
+            position: absolute;
+            background-color: rgba(255, 255, 255, 0.9);
+            color: #333;
+            border: 1px solid rgba(0, 0, 0, 0.1);
+            border-radius: 4px;
+            padding: 8px;
+            font-size: 12px;
+            pointer-events: none;
+            z-index: 1000;
+            box-shadow: 0 2px 4px rgba(0, 0, 0, 0.1);
+        }
+        .chart-tooltip strong {
+            display: inline-block;
+            min-width: 100px; /* Align keys */
+        }
+    </style>
+</head>
+<body class="bg-gray-100 p-4">
+    <div class="container rounded-lg shadow-lg">
+        <h1 class="text-2xl font-bold mb-6">Trade and OHLCV Analysis</h1>
+
+        <div id="chartContainer">
+            <p id="chartStatusMessage">Loading chart data and library...</p>
+        </div>
+
+        <div id="tradeDetails" class="bg-gray-200 p-4 rounded-md overflow-x-auto">
+            Hover over a trade marker on the chart to see its details here.
+        </div>
+    </div>
+
+    <script>
+        // Variables to track loading status
+        let combinedData = null;
+        let chartInitialized = false;
+        const chartStatusMessageElement = document.getElementById('chartStatusMessage');
+
+        // Function to update status message
+        function updateChartStatus(message, isError = false) {
+            if (chartStatusMessageElement) {
+                chartStatusMessageElement.innerText = message;
+                chartStatusMessageElement.style.color = isError ? 'red' : '#666';
+            }
+        }
+
+        // Function to fetch JSON data
+        async function fetchData(jsonFilePath) {
+            updateChartStatus("Fetching chart data...");
+            try {
+                const response = await fetch(jsonFilePath);
+                if (!response.ok) {
+                    const errorText = await response.text();
+                    throw new Error(`HTTP error! status: ${response.status}. Response: ${errorText}`);
+                }
+                const data = await response.json();
+                console.log("Data loaded successfully from JSON:", data);
+
+                // --- Convert 'time' from milliseconds to seconds for Lightweight Charts ---
+                if (data.ohlcv) {
+                    data.ohlcv.forEach(item => {
+                        item.time = Number(item.time) / 1000; // Convert milliseconds to seconds
+                    });
+                }
+
+                // --- Convert 'time' from milliseconds to seconds for trade markers ---
+                if (data.tradeMarkers) {
+                    data.tradeMarkers.forEach(marker => {
+                        marker.time = Number(marker.time) / 1000; // Convert milliseconds to seconds
+                    });
+                }
+
+                updateChartStatus("Chart data loaded. Initializing chart...");
+                return data;
+            } catch (error) {
+                console.error("Error fetching data:", error);
+                const errorMessage = `Error loading data: ${error.message}. Make sure the JSON file path is correct and the file is accessible (e.g., run a local server).`;
+                updateChartStatus(errorMessage, true);
+                document.getElementById('tradeDetails').innerText = errorMessage; // Also update trade details area
+                return null;
+            }
+        }
+
+        // Function to initialize and display the chart
+        async function initializeChart() { // Made async to allow await fetchData
+            // Only proceed if LightweightCharts object is available AND chart hasn't been initialized yet
+            if (typeof window.LightweightCharts !== 'undefined' && typeof window.LightweightCharts.createChart === 'function' && !chartInitialized) {
+                console.log("Attempting to initialize chart...");
+
+                // Fetch data first
+                const dataFilePath = './results/backtesting/ADAUSDT_5m_xgboost_trades_ohlcv_analysis.json';
+                combinedData = await fetchData(dataFilePath);
+
+                if (!combinedData) {
+                    console.error("Failed to load combinedData. Aborting chart initialization.");
+                    return; // Exit if data loading failed
+                }
+
+                // --- CRITICAL LOGGING: Check combinedData right after fetching and conversion ---
+                console.log("Combined Data at initializeChart (after conversions):", combinedData);
+                // --- END CRITICAL LOGGING ---
+
+
+                chartInitialized = true; // Prevent re-initialization
+
+                if (!combinedData.ohlcv || combinedData.ohlcv.length === 0) {
+                     const msg = "No OHLCV data available to display chart.";
+                     updateChartStatus(msg, true);
+                     document.getElementById('tradeDetails').innerText = msg;
+                     return;
+                }
+
+                const chartContainer = document.getElementById('chartContainer');
+
+                // Check container dimensions
+                const containerWidth = chartContainer.clientWidth;
+                const containerHeight = chartContainer.clientHeight;
+                if (containerWidth === 0 || containerHeight === 0) {
+                    const msg = `Chart container has zero dimensions (Width: ${containerWidth}px, Height: ${containerHeight}px). Cannot render chart.`;
+                    console.error(msg);
+                    updateChartStatus(msg, true);
+                    document.getElementById('tradeDetails').innerText = msg;
+                    return;
+                }
+                console.log(`Chart container dimensions: ${containerWidth}x${containerHeight}`);
+
+
+                // Clear initial loading message or previous error from the chart container
+                if (chartStatusMessageElement) {
+                    chartStatusMessageElement.remove();
+                }
+                // Reset trade details area
+                document.getElementById('tradeDetails').innerText = "Hover over a trade marker on the chart to see its details here.";
+
+                // --- Data Validation and Logging for OHLCV ---
+                const ohlcvData = combinedData.ohlcv;
+                let hasInvalidOHLCV = false;
+                let minPrice = Infinity;
+                let maxPrice = -Infinity;
+
+                console.group("OHLCV Data Inspection (JavaScript)");
+                for (let i = 0; i < Math.min(ohlcvData.length, 10); i++) { // Log first 10 items
+                    const item = ohlcvData[i];
+                    // Check for NaN or Infinity in OHLC values
+                    if (isNaN(item.open) || isNaN(item.high) || isNaN(item.low) || isNaN(item.close) ||
+                        !isFinite(item.open) || !isFinite(item.high) || !isFinite(item.low) || !isFinite(item.close)) {
+                        console.error(`Invalid OHLCV value found at index ${i}:`, item);
+                        hasInvalidOHLCV = true;
+                        break;
+                    }
+                    // Check if 'time' is a number and not zero
+                    if (typeof item.time !== 'number' || isNaN(item.time) || item.time === 0) { // Added isNaN check
+                         console.error(`Invalid, NaN, or zero 'time' value found at index ${i}:`, item.time);
+                         hasInvalidOHLCV = true;
+                         break;
+                    }
+
+                    // Update min/max price
+                    minPrice = Math.min(minPrice, item.low);
+                    maxPrice = Math.max(maxPrice, item.high);
+                    console.log(`OHLCV[${i}]: time=${item.time} (Type: ${typeof item.time}), open=${item.open}, high=${item.high}, low=${item.low}, close=${item.close}`);
+                }
+                console.groupEnd();
+
+                console.log(`OHLCV Data Range (JavaScript): Min Price = ${minPrice}, Max Price = ${maxPrice}`);
+                console.log(`Total OHLCV data points: ${ohlcvData.length}`);
+
+                if (hasInvalidOHLCV) {
+                    const msg = "Chart data contains invalid OHLCV values (NaN, Infinity, or zero/invalid time). Cannot render chart correctly. Please check your Python data processing.";
+                    updateChartStatus(msg, true);
+                    document.getElementById('tradeDetails').innerText = msg;
+                    return; // Stop initialization if data is bad
+                }
+
+                // Check for flat data range
+                if (maxPrice - minPrice < 1e-9) { // Use a small epsilon for float comparison
+                    const msg = `OHLCV data has an extremely narrow or zero price range (${minPrice} to ${maxPrice}). Chart may appear flat.`;
+                    console.warn(msg);
+                    // Don't stop, but warn the user
+                    // updateChartStatus(msg, true); // Optionally show this as an error on screen
+                }
+
+
+                try {
+                    // Create chart
+                    const chart = LightweightCharts.createChart(chartContainer, {
+                        width: containerWidth, // Use actual container width
+                        height: containerHeight, // Use actual container height
+                        layout: {
+                            backgroundColor: '#ffffff',
+                            textColor: '#333',
+                        },
+                        grid: {
+                            vertLines: {
+                                color: 'rgba(197, 203, 206, 0.5)',
+                            },
+                            horzLines: {
+                                color: 'rgba(197, 203, 206, 0.5)',
+                            },
+                        },
+                        timeScale: {
+                            timeVisible: true,
+                            secondsVisible: true, // Ensure seconds are visible if your data granularity is that fine
+                            // Now that we're passing seconds, this should work as expected
+                        },
+                         crosshair: {
+                            mode: LightweightCharts.CrosshairMode.Normal,
+                        },
+                         priceScale: {
+                            autoScale: true, // Ensure auto-scaling is enabled
+                        }
+                    });
+
+                    // Create candlestick series
+                    const candlestickSeries = chart.addCandlestickSeries({
+                        upColor: '#26A69A', // Green for up candles
+                        downColor: '#EF5350', // Red for down candles
+                        borderVisible: false,
+                        wickColor: '#737375',
+                        wickUpColor: '#26A69A',
+                        wickDownColor: '#EF5350',
+                    });
+
+                    // Set OHLCV data to the series
+                    candlestickSeries.setData(ohlcvData); // Use the validated and converted data
+
+
+                    // Add trade markers if available
+                    if (combinedData.tradeMarkers && combinedData.tradeMarkers.length > 0) {
+                        // Ensure each marker has a unique ID, otherwise Lightweight Charts might not render them all
+                        // We'll use the original tradeDetails.order_id or a simple index if not available
+                        const markersWithUniqueIds = combinedData.tradeMarkers.map((marker, index) => ({
+                            ...marker,
+                            id: marker.tradeDetails && marker.tradeDetails.order_id ? String(marker.tradeDetails.order_id) : `marker_${index}`
+                        }));
+
+                        candlestickSeries.setMarkers(markersWithUniqueIds);
+                        console.log(`Total trade markers: ${markersWithUniqueIds.length}`);
+                        console.group("Trade Markers Inspection (JavaScript)");
+                        markersWithUniqueIds.slice(0, 5).forEach((marker, i) => {
+                            console.log(`Marker[${i}]: time=${marker.time} (Type: ${typeof marker.time}), position=${marker.position}, text=${marker.text}, id=${marker.id}`);
+                        });
+                        console.groupEnd();
+
+
+                         // Add Event Listener for Marker Clicks
+                         chart.subscribeClick(param => {
+                            if (param.markers) {
+                                const clickedMarker = param.markers.find(marker => marker.tradeDetails);
+                                if (clickedMarker) {
+                                    displayTradeDetails(clickedMarker.tradeDetails);
+                                }
+                            }
+                         });
+
+                         // Add Event Listener for Crosshair Move (for Hover Details)
+                         chart.subscribeCrosshairMove(param => {
+                             if (param.markers && param.markers.length > 0) {
+                                 const hoveredMarker = param.markers.find(marker => marker.tradeDetails);
+                                 if (hoveredMarker) {
+                                     displayTradeDetails(hoveredMarker.tradeDetails);
+                                     return;
+                                 }
+                             }
+                             document.getElementById('tradeDetails').innerText = "Hover over a trade marker on the chart to see its details here.";
+                         });
+
+                    } else {
+                        console.warn("No trade markers available in data.");
+                        // Keep default hover text if no markers
+                    }
+
+                     // Handle window resizing
+                     new ResizeObserver(entries => {
+                        if (entries.length === 0 || entries[0].target !== chartContainer) {
+                            return;
+                        }
+                        const newRect = entries[0].contentRect;
+                        chart.applyOptions({ height: newRect.height, width: newRect.width });
+                        chart.timeScale().fitContent(); // Re-fit content on resize
+                    }).observe(chartContainer);
+
+                     // Initial chart fit
+                     chart.timeScale().fitContent();
+                    console.log("Chart initialized successfully.");
+                    updateChartStatus("Chart loaded successfully.", false);
+
+                } catch (error) {
+                    console.error("Error during chart initialization:", error);
+                    const errorMessage = `Error initializing chart: ${error.message}. Please check the console for more details.`;
+                    updateChartStatus(errorMessage, true);
+                    document.getElementById('tradeDetails').innerText = errorMessage;
+                }
+            } else {
+                 console.log("Waiting for data and Lightweight Charts library to be ready...");
+                 // Status message already set by fetchData or initial HTML
+            }
+        }
+
+        // Function to display trade details in the dedicated div
+        function displayTradeDetails(tradeDetails) {
+             const detailsDiv = document.getElementById('tradeDetails');
+             if (!tradeDetails) {
+                 detailsDiv.innerText = "Hover over a trade marker on the chart to see its details here.";
+                 return;
+             }
+
+             let detailsHtml = '<h2>Trade Details:</h2><pre>';
+             const displayOrder = [
+                 'entry_time', 'exit_time', 'duration_minutes', 'net_pnl',
+                 'gross_pnl', 'total_fees', 'direction', 'exit_reason',
+                 'size_qty', 'size_usd_entry', 'entry_price', 'exit_price', 'leverage',
+                 'sl_price', 'tp_price', 'liq_price', 'holding_duration_bars',
+                 'balance_after_trade', 'equity_after_trade', 'order_id'
+             ];
+
+             displayOrder.forEach(key => {
+                 if (tradeDetails.hasOwnProperty(key) && tradeDetails[key] !== null) {
+                      let value = tradeDetails[key];
+
+                      if (key === 'direction') {
+                          if (value > 0) value = 'Long';
+                          else if (value < 0) value = 'Short';
+                          else value = 'Neutral/Other';
+                      } else if (typeof value === 'number' && !key.includes('_time')) {
+                         // Format numbers to 6 decimal places, but not timestamps
+                         value = value.toFixed(6);
+                      } else if (key.includes('_time') && typeof value === 'number') {
+                          try {
+                              // Value is already in milliseconds from Python.
+                              // For display, convert back to Date object.
+                              const date = new Date(value); // This value is in milliseconds
+                              value = date.toLocaleString('en-US', { timeZoneName: 'short' });
+                          } catch (e) {
+                              // Keep original value if formatting fails
+                              console.warn(`Failed to format timestamp for key ${key}: ${value}, Error: ${e}`);
+                          }
+                      }
+                     detailsHtml += `<strong>${key.replace(/_/g, ' ').replace(/\b\w/g, l => l.toUpperCase())}:</strong> ${value}\n`;
+                 }
+             });
+
+             detailsHtml += '</pre>';
+             detailsDiv.innerHTML = detailsHtml;
+        }
+
+
+        // Event listener for when the DOM is fully loaded
+        document.addEventListener('DOMContentLoaded', async () => {
+            // IMPORTANT: Update this path to match your generated JSON file!
+            // Example: './results/backtesting/ADAUSDT_5m_xgboost_trades_ohlcv_analysis.json'
+            // The exact filename will depend on the symbol, interval, and model_type you used
+            // when running scripts/convert_trades_to_json.py
+            // combinedData is now fetched inside initializeChart
+            initializeChart();
+        });
+
+    </script>
+</body>
+</html>
