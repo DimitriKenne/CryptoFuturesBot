@@ -85,7 +85,7 @@ This project was initiated in **April 2025**, directly inspired by the research 
 * **Comprehensive Logging**: Detailed, rotating logging for all stages of bot operation, backtesting, and data processing, facilitating debugging and performance monitoring.
 
 ## **Project Structure**
-
+```
 .
 ├── .env # Environment variables (API keys, secrets)
 ├── .gitignore # Git ignore file
@@ -149,6 +149,7 @@ This project was initiated in **April 2025**, directly inspired by the research 
 ├── model_trainer.py
 ├── notification_manager.py
 └── results_analyzer.py
+```
 
 ## **Key Components Explained**
 
