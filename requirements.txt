@@ -33,3 +33,6 @@ python-telegram-bot>=20.0 # Latest stable is 20.8 (as of May 2025)
 
 # For development/testing
 pytest>=8.0.0 # Latest stable is 8.2.0 (as of May 2025)
+
+arch
+tqdm

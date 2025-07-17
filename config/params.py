@@ -101,6 +101,10 @@ GENERAL_CONFIG = {
     "random_search_n_iter": 20, # int: Default number of iterations for RandomizedSearchCV.
     "tuning_scoring_metric": 'balanced_accuracy', # str: Default metric for tuning ('accuracy', 'balanced_accuracy', 'f1_macro', etc.).
     "cv_jobs":-1,           # int: Number of parallel jobs for cross-validation (-1 = use all).
+    
+    # --- Monte Carlo Simulation Parameters (NEW) ---
+    "monte_carlo_simulations": 0, # int: Number of Monte Carlo simulations to run.
+    "monte_carlo_plot_num_curves": 2, # int: Number of equity curves to plot in MC visualization.
 }
 
 # --- Exchange Configuration ---

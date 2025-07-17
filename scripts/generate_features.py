@@ -2,7 +2,7 @@
 """
 generate_features.py
 
-Loads raw OHLCV data using DataManager, engineers features using the FeatureEngineer,
+Loads raw OHLCV data using DataManager, engineers features using the FeaturesEngineer,
 and saves the resulting DataFrame using DataManager.
 
 Uses the updated configuration structure from config/params.py and config/paths.py.
@@ -36,8 +36,8 @@ try:
 
     # Import the DataManager
     from utils.data_manager import DataManager
-    # Import the FeatureEngineer
-    from utils.features_engineer import FeatureEngineer
+    # Import the FeaturesEngineer
+    from utils.features_engineer import FeaturesEngineer
     # Assuming TemporalSafetyError is defined in a custom exceptions.py file
     from utils.exceptions import TemporalSafetyError
 
@@ -74,7 +74,7 @@ logger.info("Rotating logging configured successfully.")
 def generate_features_pipeline(symbol: str, interval: str):
     """
     End-to-end feature generation pipeline: loads raw data using DataManager,
-    engineers features using the FeatureEngineer, and saves the resulting
+    engineers features using the FeaturesEngineer, and saves the resulting
     processed data using DataManager. Handles errors including temporal safety violations.
 
     Args:
@@ -86,15 +86,15 @@ def generate_features_pipeline(symbol: str, interval: str):
     # Instantiate DataManager
     dm = DataManager()
 
-    # --- Create a combined config for FeatureEngineer ---
+    # --- Create a combined config for FeaturesEngineer ---
     # Merge FEATURE_CONFIG with relevant parameters from STRATEGY_CONFIG
     # Use deepcopy to avoid modifying the original imported configs
     feature_engineer_config = copy.deepcopy(FEATURE_CONFIG)
 
-    # Add/Override parameters required by FeatureEngineer from STRATEGY_CONFIG
+    # Add/Override parameters required by FeaturesEngineer from STRATEGY_CONFIG
     # Prioritize STRATEGY_CONFIG if available, then FEATURE_CONFIG default
     # Use .get() with default fallbacks to handle cases where keys might be missing
-    # NOTE: Ensure these keys are actually used and expected by FeatureEngineer
+    # NOTE: Ensure these keys are actually used and expected by FeaturesEngineer
     feature_engineer_config['volatility_window_bars'] = STRATEGY_CONFIG.get('volatility_window_bars', feature_engineer_config.get('volatility_window_bars'))
     feature_engineer_config['fixed_take_profit_pct'] = STRATEGY_CONFIG.get('fixed_take_profit_pct', feature_engineer_config.get('fixed_take_profit_pct'))
     feature_engineer_config['fixed_stop_loss_pct'] = STRATEGY_CONFIG.get('fixed_stop_loss_pct', feature_engineer_config.get('fixed_stop_loss_pct'))
@@ -115,18 +115,18 @@ def generate_features_pipeline(symbol: str, interval: str):
     feature_engineer_config['temporal_validation'] = temp_val_cfg
 
     # Add sequence_length_bars from STRATEGY_CONFIG if not in FEATURE_CONFIG (or prioritize STRATEGY_CONFIG)
-    # FeatureEngineer uses this for context, but it's primarily a model/strategy parameter
-    # Ensure it's passed if needed by FeatureEngineer methods (currently not explicitly used in process())
-    # If FeatureEngineer needed it, we'd add it here:
+    # FeaturesEngineer uses this for context, but it's primarily a model/strategy parameter
+    # Ensure it's passed if needed by FeaturesEngineer methods (currently not explicitly used in process())
+    # If FeaturesEngineer needed it, we'd add it here:
     # feature_engineer_config['sequence_length_bars'] = STRATEGY_CONFIG.get('sequence_length_bars', FEATURE_CONFIG.get('sequence_length_bars'))
 
 
-    # Instantiate FeatureEngineer with the combined config
+    # Instantiate FeaturesEngineer with the combined config
     try:
-        engineer = FeatureEngineer(feature_engineer_config)
-        logger.info("FeatureEngineer initialized with combined configuration.")
+        engineer = FeaturesEngineer(feature_engineer_config)
+        logger.info("FeaturesEngineer initialized with combined configuration.")
     except Exception as e:
-        logger.error(f"An error occurred during FeatureEngineer initialization: {e}", exc_info=True)
+        logger.error(f"An error occurred during FeaturesEngineer initialization: {e}", exc_info=True)
         sys.exit(1)
 
 
@@ -169,7 +169,7 @@ def generate_features_pipeline(symbol: str, interval: str):
         logger.info(f"Successfully loaded raw data for {symbol.upper()} {interval}. Shape: {raw_df.shape}")
 
 
-        # Engineer features using the FeatureEngineer
+        # Engineer features using the FeaturesEngineer
         logger.info("Starting feature engineering...")
         # The engineer.process method handles NaN cleaning and temporal validation internally
         processed_df = engineer.process(raw_df)
@@ -195,7 +195,7 @@ def generate_features_pipeline(symbol: str, interval: str):
 
 
     except TemporalSafetyError as e:
-        # Catch the specific temporal safety error raised by FeatureEngineer
+        # Catch the specific temporal safety error raised by FeaturesEngineer
         logger.error(f"Feature engineering aborted due to temporal safety violation: {str(e)}")
         # Log the specific features that caused the violation if available
         if hasattr(e, 'features') and e.features:

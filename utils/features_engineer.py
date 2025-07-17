@@ -31,7 +31,7 @@ except ImportError as e:
 # Set up logger for this module
 logger = logging.getLogger(__name__)
 
-class FeatureEngineer:
+class FeaturesEngineer:
     """
     Engineers technical and statistical features from OHLCV data.
     Focuses on generating general-purpose features independent of specific

@@ -11,7 +11,7 @@ Updates:
 - Saves bot state (capital and current open position) to a JSON file.
 - Uses key names for trade details consistent with ResultsAnalyser expectations.
 - Implements periodic state saving in the main loop.
-- Updated to align with changes in DataManager, FeatureEngineer, and ModelTrainer,
+- Updated to align with changes in DataManager, FeaturesEngineer, and ModelTrainer,
   particularly in how expected raw feature columns for the model are determined.
 - Added configuration parameter 'exit_on_neutral_signal' to control neutral signal exits.
 - Added configuration parameters 'allow_long_trades' and 'allow_short_trades' to filter entry signals.
@@ -88,7 +88,7 @@ try:
     from utils.exchange_interface import ExchangeInterface
     from utils.notification_manager import NotificationManager
     from utils.model_trainer import ModelTrainer
-    from utils.features_engineer import FeatureEngineer
+    from utils.features_engineer import FeaturesEngineer
     from utils.logger_config import setup_rotating_logging
     from utils.data_manager import DataManager # Import DataManager for Parquet handling
     # Custom exceptions
@@ -206,9 +206,9 @@ class TradingBot:
             self._critical_shutdown(f"Exchange adapter initialization failed: {e}")
 
         # --- Initialize Feature Engineer ---
-        self.feature_engineer: Optional[FeatureEngineer] = None
+        self.feature_engineer: Optional[FeaturesEngineer] = None
         # Determine the expected column name for volatility regime from FEATURE_CONFIG defaults
-        # Assuming the FeatureEngineer uses the shortest ATR period for the regime calculation
+        # Assuming the FeaturesEngineer uses the shortest ATR period for the regime calculation
         fe_atr_periods = FEATURE_CONFIG.get('atr_periods', [14]) # Get default ATR periods from FE config
         atr_period_for_regime = min(fe_atr_periods) if fe_atr_periods else 14 # Use min period or default
         self.volatility_regime_col_name = f'volatility_regime' # Feature Engineer names it simply 'volatility_regime'
@@ -279,7 +279,7 @@ class TradingBot:
             self.expected_raw_feature_columns = []
             self.logger.error("Model trainer not initialized. Cannot determine expected raw feature columns.")
 
-        # Ensure OHLCV are not in the feature list (they are inputs to FeatureEngineer, not model features)
+        # Ensure OHLCV are not in the feature list (they are inputs to FeaturesEngineer, not model features)
         if self.expected_raw_feature_columns:
             self.expected_raw_feature_columns = [
                 col for col in self.expected_raw_feature_columns
@@ -435,8 +435,8 @@ class TradingBot:
 
 
     def _initialize_feature_engineer(self):
-        """Initializes the FeatureEngineer with combined configuration."""
-        self.logger.info("Initializing FeatureEngineer...")
+        """Initializes the FeaturesEngineer with combined configuration."""
+        self.logger.info("Initializing FeaturesEngineer...")
         feature_engineer_config = copy.deepcopy(FEATURE_CONFIG)
         fe_params_to_override = {
             'volatility_adjustment_enabled': self.volatility_adjustment_enabled,
@@ -447,7 +447,7 @@ class TradingBot:
             'alpha_stop_loss': self.alpha_stop_loss,
             'trend_filter_enabled': self.trend_filter_enabled,
             'trend_filter_ema_period': self.trend_filter_ema_period,
-            # Ensure sequence_length_bars is passed to FeatureEngineer config
+            # Ensure sequence_length_bars is passed to FeaturesEngineer config
             'sequence_length_bars': self.sequence_length,
         }
         feature_engineer_config.update(fe_params_to_override)
@@ -455,12 +455,12 @@ class TradingBot:
              feature_engineer_config['temporal_validation'] = {}
         feature_engineer_config['temporal_validation']['enabled'] = False # Disable for live trading
 
-        self.feature_engineer = FeatureEngineer(config=feature_engineer_config)
+        self.feature_engineer = FeaturesEngineer(config=feature_engineer_config)
         self.atr_col_name_volatility = f'atr_{self.feature_engineer.config.get("volatility_window_bars", 14)}'
         self.ema_filter_col_name = f'ema_{self.feature_engineer.config.get("trend_filter_ema_period", 200)}'
         # Volatility regime column name is already determined in __init__
-        self.logger.info("FeatureEngineer initialized.")
-        self.logger.debug(f"FeatureEngineer using config: {self.feature_engineer.config}")
+        self.logger.info("FeaturesEngineer initialized.")
+        self.logger.debug(f"FeaturesEngineer using config: {self.feature_engineer.config}")
 
 
     def _load_model(self):
@@ -537,7 +537,7 @@ class TradingBot:
         INITIAL_DATA_BUFFER = 50 # Keep a buffer beyond the minimum requirements
         self.total_lookback_needed = max(feature_lookback, model_sequence_length) + INITIAL_DATA_BUFFER
 
-        self.logger.info(f"FeatureEngineer lookback: {feature_lookback}, Model sequence: {model_sequence_length}")
+        self.logger.info(f"FeaturesEngineer lookback: {feature_lookback}, Model sequence: {model_sequence_length}")
         self.logger.info(f"Total lookback needed for initial data fetch: {self.total_lookback_needed} bars (includes {INITIAL_DATA_BUFFER} buffer).")
 
 
@@ -957,7 +957,7 @@ class TradingBot:
 
             # Generate features for the entire buffer; latest features are in the last row
             featured_data = self.feature_engineer.process(self.data_buffer)
-            self.logger.debug(f"FeatureEngineer produced {len(featured_data.columns)} columns.")
+            self.logger.debug(f"FeaturesEngineer produced {len(featured_data.columns)} columns.")
 
             # Ensure the volatility regime column is present in the latest features if filter is enabled
             if self.volatility_regime_filter_enabled and self.volatility_regime_col_name not in featured_data.columns:
