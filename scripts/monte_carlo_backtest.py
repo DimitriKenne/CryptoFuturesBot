@@ -31,6 +31,10 @@ import pandas as pd
 import numpy as np
 import copy
 from tqdm import tqdm
+
+# --- IMPORTANT: Set Matplotlib backend BEFORE importing pyplot ---
+import matplotlib
+matplotlib.use('Agg') # Use the 'Agg' backend for non-interactive plotting
 import matplotlib.pyplot as plt
 import seaborn as sns
 

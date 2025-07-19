@@ -12,6 +12,7 @@ and its expected data type or format.
 
 **MODIFIED (NEW)**: Added parameters for confidence threshold filtering in STRATEGY_CONFIG.
 **MODIFIED (NEW)**: Added parameters for volatility regime filtering in STRATEGY_CONFIG.
+**MODIFIED (NEW)**: Added parameters for PCA dimensionality reduction in MODEL_CONFIG.
 """
 
 from typing import Optional
@@ -19,6 +20,13 @@ import numpy as np
 import os
 from pathlib import Path
 import logging
+
+
+# --- Import dotenv to load environment variables FIRST ---
+from dotenv import load_dotenv, find_dotenv
+# Load environment variables from .env file
+load_dotenv(find_dotenv())
+# --- End dotenv import ---
 
 # --- Import for Hyperparameter Tuning Distributions ---
 # Need to install scipy: pip install scipy
@@ -245,6 +253,17 @@ MODEL_CONFIG = {
         "class_balancing": "undersampling",            # str or None: 'undersampling', 'oversampling'. Applied before training.
         "undersample_ratio": 1,           # float (0-1): Target ratio for undersampling.
 
+        # --- Dimensionality Reduction (PCA) ---
+        'dimensionality_reduction': {
+            'enabled': False,               # bool: Enable PCA for this model?
+            'method': 'pca',                # str: Method (currently 'pca' supported).
+            'params': {
+                'n_components': 0.95,       # float (0-1) for variance explained, or int for number of components.
+                                            # If None, all components are kept.
+            }
+        },
+        # --- End of Dimensionality Reduction ---
+
         # --- Hyperparameter Tuning Distributions for RandomForest ---
         # Requires scipy.stats (uniform, randint)
         'tuning_param_dist': {
@@ -278,6 +297,17 @@ MODEL_CONFIG = {
         "cv_n_splits": 5,                   # int
         "class_balancing": "undersampling",            # str or None
         "undersample_ratio": 1,           # float (0-1)
+
+        # --- Dimensionality Reduction (PCA) ---
+        'dimensionality_reduction': {
+            'enabled': False,               # bool: Enable PCA for this model?
+            'method': 'pca',                # str: Method (currently 'pca' supported).
+            'params': {
+                'n_components': 0.95,       # float (0-1) for variance explained, or int for number of components.
+                                            # If None, all components are kept.
+            }
+        },
+        # --- End of Dimensionality Reduction ---
 
         # --- Hyperparameter Tuning Distributions for XGBoost ---
         # Requires scipy.stats (uniform, randint)
@@ -313,6 +343,17 @@ MODEL_CONFIG = {
         "cv_n_splits": 5,                   # int
         "class_balancing": "undersampling",            # str or None: SMOTE, etc. (use with care for sequences).
         "class_weight": None,               # dict or None: Assign weights to classes during training.
+
+        # --- Dimensionality Reduction (PCA) ---
+        'dimensionality_reduction': {
+            'enabled': False,               # bool: Enable PCA for this model?
+            'method': 'pca',                # str: Method (currently 'pca' supported).
+            'params': {
+                'n_components': 0.95,       # float (0-1) for variance explained, or int for number of components.
+                                            # If None, all components are kept.
+            }
+        },
+        # --- End of Dimensionality Reduction ---
     }
     # Add configurations for other model types (e.g., LightGBM, CatBoost, SVM).
 }
@@ -328,8 +369,8 @@ STRATEGY_CONFIG = {
 
     # Capital and Risk
     "initial_capital": 10.0,          # float: Starting capital for simulation/live tracking.
-    "risk_per_trade_pct": 5.0,          # float (0-100): Max percentage of capital to risk per trade.
-    "leverage": 40,                     # int: Exchange leverage setting.
+    "risk_per_trade_pct": 1.0,          # float (0-100): Max percentage of capital to risk per trade.
+    "leverage": 5,                     # int: Exchange leverage setting.
     "min_liq_distance_pct": 1.0,        # float (0-100): Minimum required distance (%) between SL and estimated liquidation price.
 
     # Execution Costs
@@ -357,7 +398,7 @@ STRATEGY_CONFIG = {
     },
     # dict[int, bool]: Maps volatility regime (0=low, 1=medium, 2=high) to whether trading is allowed.
     "allow_trading_in_volatility_regime": {
-        0: False, # Low Volatility: Do not trade
+        0: True, # Low Volatility: Do not trade
         1: True,  # Medium Volatility: Allow trading
         2: False   # High Volatility: Allow trading
     },
@@ -373,15 +414,15 @@ STRATEGY_CONFIG = {
     'alpha_stop_loss': 6,             # float: ATR multiplier for dynamic SL (if enabled).
 
     # Additional Filters
-    'trend_filter_enabled': True,      # bool: Apply EMA trend filter to signals?
+    'trend_filter_enabled': False,      # bool: Apply EMA trend filter to signals?
     "trend_filter_ema_period": 20,     # int: Period for the trend filter EMA (if enabled).
 
     # --- Confidence Filter Parameters (NEW) ---
     'confidence_filter_enabled': True,  # bool: Enable filtering trades based on model confidence?
     # float (0-100): Minimum probability/confidence required for a LONG signal to be considered valid for entry.
-    'confidence_threshold_long_pct': 85.0, # Example: require at least 60% confidence for LONG
+    'confidence_threshold_long_pct': 60.0, # Example: require at least 60% confidence for LONG
     # float (0-100): Minimum probability/confidence required for a SHORT signal to be considered valid for entry.
-    'confidence_threshold_short_pct': 90.0, # Example: require at least 60% confidence for SHORT
+    'confidence_threshold_short_pct': 60.0, # Example: require at least 60% confidence for SHORT
 
 
     # Data Handling

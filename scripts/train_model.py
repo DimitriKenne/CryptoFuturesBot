@@ -19,13 +19,15 @@ MODIFIED: Added functionality to specify a subset of features to use for trainin
           via a command-line argument.
 MODIFIED: Updated DataManager calls for loading data and saving model artifacts.
 MODIFIED: Adjusted labeled data loading to no longer require a strategy-specific suffix.
+MODIFIED: Added command-line arguments and logic for PCA dimensionality reduction.
+MODIFIED: Added imports for ColumnTransformer and Union.
 """
 
 import sys
 import logging
 import argparse
 from pathlib import Path
-from typing import Tuple, List, Dict, Any, Optional
+from typing import Tuple, List, Dict, Any, Optional, Union # Added Union
 from collections import Counter # Import Counter for imblearn setup in tuning
 import time # Import time for measuring training duration
 import copy # Import copy for deepcopying config
@@ -33,12 +35,21 @@ import copy # Import copy for deepcopying config
 import pandas as pd
 import numpy as np
 
+# --- Import dotenv to load environment variables FIRST ---
+from dotenv import load_dotenv, find_dotenv
+# Load environment variables from .env file
+load_dotenv(find_dotenv())
+# --- End dotenv import ---
+
 # Import scikit-learn and imblearn components for tuning
 from sklearn.ensemble import RandomForestClassifier
 from sklearn.model_selection import RandomizedSearchCV, TimeSeriesSplit
 from imblearn.pipeline import Pipeline
 from imblearn.over_sampling import SMOTE
 from imblearn.under_sampling import RandomUnderSampler
+from sklearn.preprocessing import StandardScaler # For preprocessor in tuning
+from sklearn.decomposition import PCA # For PCA in tuning
+from sklearn.compose import ColumnTransformer # Added ColumnTransformer
 
 # Import parameter distributions for RandomizedSearchCV
 from scipy.stats import uniform, randint
@@ -209,8 +220,27 @@ def run_tuning(model_key: str, X_train: pd.DataFrame, y_train: pd.Series, model_
     # Pass the specific model configuration to the dummy trainer
     # Pass the feature_subset to the dummy trainer's preprocessor creation
     feature_subset_for_tuning = model_config.get('features_to_use') # Get the feature subset from config
-    dummy_trainer_for_preprocessor = ModelTrainer(config=model_config) # Pass the full config
-    preprocessor = dummy_trainer_for_preprocessor._create_preprocessor(X_train, feature_subset=feature_subset_for_tuning)
+
+    # --- Prepare for PCA in tuning pipeline if enabled ---
+    pca_enabled_tuning = model_config.get('dimensionality_reduction', {}).get('enabled', False)
+    pca_method_tuning = model_config.get('dimensionality_reduction', {}).get('method', 'pca')
+    pca_params_tuning = model_config.get('dimensionality_reduction', {}).get('params', {})
+
+    # Create a pipeline for numeric features: StandardScaler -> (Optional) PCA
+    numeric_transformer_steps = [('scaler', StandardScaler())]
+    if pca_enabled_tuning and pca_method_tuning == 'pca':
+        logger.info(f"Adding PCA to tuning preprocessor with params: {pca_params_tuning}")
+        numeric_transformer_steps.append(('pca', PCA(**pca_params_tuning)))
+
+    numeric_transformer_for_tuning = Pipeline(steps=numeric_transformer_steps)
+
+    # Create the ColumnTransformer for tuning
+    preprocessor = ColumnTransformer(
+        transformers=[
+            ('num', numeric_transformer_for_tuning, X_train.select_dtypes(include=np.number).columns.tolist())
+        ],
+        remainder='passthrough'
+    )
 
 
     # Create the imblearn pipeline steps for tuning
@@ -557,11 +587,13 @@ def main(
     # REMOVED: label_strategy: str, as it's no longer needed for loading the labeled file
     train_ratio: float,
     skip_tuning: bool = False,
-    features_to_use: Optional[List[str]] = None
+    features_to_use: Optional[List[str]] = None,
+    enable_pca: bool = False, # New argument
+    pca_n_components: Optional[Union[int, float]] = None # New argument
 ):
     """
     Main function to load data, tune hyperparameters (optionally), train, evaluate, and save a model
-    for ternary classification. Allows specifying a subset of features.
+    for ternary classification. Allows specifying a subset of features and PCA.
     Uses DataManager for loading data and saving model artifacts.
 
     Args:
@@ -572,6 +604,8 @@ def main(
         skip_tuning (bool): If True, skip hyperparameter tuning and use default params.
         features_to_use (Optional[List[str]]): A list of feature column names to use.
                                                If None, all available features are used.
+        enable_pca (bool): If True, enable PCA dimensionality reduction.
+        pca_n_components (Optional[Union[int, float]]): Number of PCA components or variance explained.
     """
     start_time = time.time()
     logger.info(f"Starting model training pipeline for {symbol.upper()} @ {interval} with model: {model_key} (Ternary Classification)")
@@ -582,6 +616,11 @@ def main(
         logger.info(f"Using specified feature subset: {features_to_use}")
     else:
         logger.info("Using all available features.")
+
+    if enable_pca:
+        logger.info(f"PCA dimensionality reduction enabled with n_components: {pca_n_components}")
+    else:
+        logger.info("PCA dimensionality reduction disabled.")
 
 
     # --- Retrieve Model Configuration ---
@@ -595,6 +634,23 @@ def main(
     model_specific_config['features_to_use'] = features_to_use
     val_ratio = model_specific_config.get('val_ratio', 0.1)
     logger.info(f"Validation ratio: {val_ratio}")
+
+    # --- Apply PCA settings from command line to model_specific_config ---
+    if enable_pca:
+        model_specific_config.setdefault('dimensionality_reduction', {})
+        model_specific_config['dimensionality_reduction']['enabled'] = True
+        model_specific_config['dimensionality_reduction'].setdefault('params', {})
+        if pca_n_components is not None:
+            model_specific_config['dimensionality_reduction']['params']['n_components'] = pca_n_components
+        else:
+            # If --enable_pca is used but --pca_components is not, use default from params.py
+            # If params.py also doesn't have it, PCA will default to n_components=None (all components)
+            logger.info("No specific n_components provided for PCA. Using default from config/params.py or PCA default (all components).")
+    else:
+        # Ensure PCA is explicitly disabled in the config if the flag is not set
+        if 'dimensionality_reduction' in model_specific_config:
+            model_specific_config['dimensionality_reduction']['enabled'] = False
+
 
     # --- Load and Split Data ---
     try:
@@ -618,7 +674,7 @@ def main(
                 model_key,
                 X_full_cleaned,
                 y_full_cleaned,
-                model_specific_config
+                model_specific_config # Pass the config with PCA settings
             )
 
             logger.info(f"Hyperparameter tuning complete for {model_key}. Best parameters found: {tuned_params}")
@@ -717,14 +773,6 @@ if __name__ == "__main__":
         default='xgboost',
         help="Model type to train. Available: ['random_forest', 'xgboost', 'lstm']. Default: xgboost."
     )
-    # REMOVED --label-strategy argument as it's no longer needed for loading the labeled file
-    # parser.add_argument(
-    #     '--label-strategy',
-    #     type=str,
-    #     required=True,
-    #     choices=LabelGenerator.get_available_strategies(),
-    #     help=f'Labeling strategy used to generate the labels (e.g., directional_ternary). Available: {", ".join(LabelGenerator.get_available_strategies())}'
-    # )
     parser.add_argument(
         '--train_ratio',
         type=float,
@@ -741,6 +789,18 @@ if __name__ == "__main__":
         type=str,
         nargs='+',
         help='Optional list of feature names to use for training. If not provided, all features are used.'
+    )
+    parser.add_argument(
+        '--enable_pca',
+        action='store_true',
+        help='Enable PCA dimensionality reduction for the model.'
+    )
+    parser.add_argument(
+        '--pca_components',
+        type=lambda x: int(x) if x.isdigit() else float(x),
+        default=None,
+        help='Number of PCA components (int) or variance to explain (float between 0 and 1). '
+             'Default from config/params.py if not specified.'
     )
 
 
@@ -763,10 +823,11 @@ if __name__ == "__main__":
             symbol=args.symbol,
             interval=args.interval,
             model_key=args.model,
-            # REMOVED: label_strategy=args.label_strategy,
             train_ratio=args.train_ratio,
             skip_tuning=args.skip_tuning,
-            features_to_use=args.features
+            features_to_use=args.features,
+            enable_pca=args.enable_pca, # Pass new argument
+            pca_n_components=args.pca_components # Pass new argument
         )
 
     except SystemExit:
@@ -792,10 +853,16 @@ if __name__ == "__main__":
         python -m scripts.train_model --symbol ADAUSDT --interval 5m --model xgboost
 
     Train skipping tuning:
-        python scripts.train_model.py --symbol ADAUSDT --interval 5m --model random_forest --skip_tuning
+        python scripts/train_model.py --symbol ADAUSDT --interval 5m --model random_forest --skip_tuning
 
     Train using a specific subset of features:
-        python scripts.train_model.py --symbol BTCUSDT --interval 1h --features ema_10 rsi_14 macd
+        python scripts/train_model.py --symbol BTCUSDT --interval 1h --features ema_10 rsi_14 macd
+
+    Train with PCA, explaining 90% variance:
+        python scripts/train_model.py --symbol BTCUSDT --interval 1h --enable_pca --pca_components 0.9
+
+    Train with PCA, keeping 10 components:
+        python scripts/train_model.py --symbol ADAUSDT --interval 5m --model random_forest --enable_pca --pca_components 10
 
     Ensure you have processed and labeled data files (including label 0) in your data/
     and config/params.py (with MODEL_CONFIG, GENERAL_CONFIG) and config/paths.py are correctly configured

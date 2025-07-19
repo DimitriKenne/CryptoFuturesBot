@@ -44,6 +44,8 @@ with clear markers for each analysis run, using the centralized rotating logger.
 **FIXED**: Added `plot_calibration_curve` function definition.
 **REVERTED**: Removed manual reshaping for LSTM in `evaluate_model` and instead pass original `X_test` to `ModelTrainer`'s `predict` and `predict_proba` methods, as `ModelTrainer` handles internal data preparation.
 **FIXED**: Modified `load_trained_model_and_preprocessor` to return the `ModelTrainer` instance directly, allowing `evaluate_model` to call its methods.
+**FIXED**: Corrected feature names for feature importance plotting when PCA is enabled.
+**FIXED**: Corrected feature importance filename pattern to avoid duplication of model_key.
 """
 
 import sys
@@ -833,7 +835,7 @@ def evaluate_model(trainer: ModelTrainer, X_test: pd.DataFrame, y_test: pd.Serie
 
 
 @log_analysis_start_end
-def analyze_feature_importance(trainer: ModelTrainer, feature_columns_original: List[str], model_key: str, output_dir: Path, analysis_table_pattern: str, analysis_plot_pattern: str, symbol: str, interval: str):
+def analyze_feature_importance(trainer: ModelTrainer, original_feature_columns: List[str], model_key: str, output_dir: Path, analysis_table_pattern: str, analysis_plot_pattern: str, symbol: str, interval: str):
     """
     Analyzes and visualizes feature importance for tree-based models.
     Skips for LSTM models.
@@ -854,15 +856,20 @@ def analyze_feature_importance(trainer: ModelTrainer, feature_columns_original: 
         final_model = trainer.model
 
     if final_model is not None:
+        # Determine the feature names that the model actually received for importance calculation
+        # This should be trainer.feature_columns_processed, which accounts for PCA if enabled.
+        feature_names_for_importance = trainer.feature_columns_processed
+        if feature_names_for_importance is None:
+            logger.error("trainer.feature_columns_processed is None. Cannot determine feature names for importance. Falling back to original features (may be incorrect if PCA was used).")
+            feature_names_for_importance = original_feature_columns # Fallback, but expect this to be populated
+
         if hasattr(final_model, 'feature_importances_'):
             importance_data = final_model.feature_importances_
-            feature_names = feature_columns_original # If preprocessor is just scaling, original names are fine
         elif hasattr(final_model, 'coef_'):
             # For linear models, coefficients can indicate importance
             # For multi-class, coef_ is (n_classes, n_features)
             # Take the sum of absolute coefficients for a simple overall importance
             importance_data = np.sum(np.abs(final_model.coef_), axis=0)
-            feature_names = feature_columns_original
         else:
             logger.warning(f"Model type '{model_key}' does not have direct 'feature_importances_' or 'coef_' attribute. Skipping feature importance analysis.")
             return
@@ -875,9 +882,16 @@ def analyze_feature_importance(trainer: ModelTrainer, feature_columns_original: 
         logger.warning("No feature importance data available.")
         return
 
+    # Critical check for length mismatch before creating DataFrame
+    if feature_names_for_importance is None or len(importance_data) != len(feature_names_for_importance):
+        logger.error(f"CRITICAL: Mismatch in lengths for feature importance: Importance data length ({len(importance_data)}) vs Feature names length ({len(feature_names_for_importance) if feature_names_for_importance else 'None'}).")
+        logger.error("This indicates an issue with feature name tracking or PCA application. Skipping feature importance plot.")
+        return # Exit the function if lengths do not match
+
+
     # Create a DataFrame for importance
     feature_importance_df = pd.DataFrame({
-        'Feature': feature_names,
+        'Feature': feature_names_for_importance, # Use the corrected feature names
         'Importance': importance_data
     })
     feature_importance_df = feature_importance_df.sort_values(by='Importance', ascending=False)
@@ -885,10 +899,10 @@ def analyze_feature_importance(trainer: ModelTrainer, feature_columns_original: 
     # Save feature importance to a CSV
     safe_interval = interval.replace(':', '_')
     importance_filepath = output_dir / analysis_table_pattern.format(
-        symbol=symbol.upper(), # Use actual symbol
-        interval=safe_interval, # Use actual interval
-        model_type=model_key, # FIX: Changed from model_key to model_type
-        analysis_type=f"{model_key}_feature_importance"
+        symbol=symbol.upper(),
+        interval=safe_interval,
+        model_type=model_key,
+        analysis_type="feature_importance" # FIX: Changed to avoid duplication
     )
 
     try:
@@ -912,8 +926,8 @@ def analyze_feature_importance(trainer: ModelTrainer, feature_columns_original: 
     plt.ylabel('Feature')
     plt.tight_layout()
     importance_plot_path = output_dir / analysis_plot_pattern.format(
-        symbol=symbol.upper(), interval=safe_interval, model_type=model_key, # FIX: Changed from model_key to model_type
-        analysis_type=f"{model_key}_feature_importance"
+        symbol=symbol.upper(), interval=safe_interval, model_type=model_key,
+        analysis_type="feature_importance" # FIX: Changed to avoid duplication
     )
     plt.savefig(importance_plot_path, dpi=150)
     plt.close()
@@ -1069,7 +1083,7 @@ def analyse_model_pipeline(symbol: str, interval: str, model_key: str, train_rat
 
         safe_interval = interval.replace(':', '_')
         conf_matrix_plot_path = plots_base_dir / PATHS['analysis_plot_pattern'].format(
-            symbol=symbol.upper(), interval=safe_interval, model_type=model_key, analysis_type="confusion_matrix" # FIX: Changed model_key to model_type
+            symbol=symbol.upper(), interval=safe_interval, model_type=model_key, analysis_type="confusion_matrix"
         )
         # Feature importance plot path is dynamically generated in analyze_feature_importance
         # Proba plot path is dynamically generated in plot_probability_histograms
@@ -1093,7 +1107,7 @@ def analyse_model_pipeline(symbol: str, interval: str, model_key: str, train_rat
 
         if not y_proba_df.empty: # Check if y_proba_df is not empty
              # Pass the collected y_test_evaluated, y_proba_df.values, and all_expected_labels
-             plot_probability_histograms(y_test_evaluated, y_proba_df.values, all_expected_labels, plots_base_dir / PATHS['analysis_plot_pattern'].format(symbol=symbol.upper(), interval=safe_interval, model_type=model_key, analysis_type="probability_distributions"), symbol, interval, model_key) # FIX: Changed model_key to model_type
+             plot_probability_histograms(y_test_evaluated, y_proba_df.values, all_expected_labels, plots_base_dir / PATHS['analysis_plot_pattern'].format(symbol=symbol.upper(), interval=safe_interval, model_type=model_key, analysis_type="probability_distributions"), symbol, interval, model_key)
              plot_roc_auc(y_test_evaluated, y_proba_df.values, all_expected_labels, plots_base_dir, symbol, interval, model_key)
              plot_precision_recall_curve(y_test_evaluated, y_proba_df.values, all_expected_labels, plots_base_dir, symbol, interval, model_key)
              plot_calibration_curve(y_test_evaluated, y_proba_df.values, all_expected_labels, plots_base_dir, symbol, interval, model_key)
@@ -1123,7 +1137,7 @@ if __name__ == "__main__":
         type=str,
         required=True,
         choices=['1m', '5m', '15m', '30m', '1h', '2h', '4h', '6h', '8h', '12h', '1d', '3d', '1w', '1M'],
-        help='Time interval (e.e.g., 5m, 1h, 1d).'
+        help='Time interval (e.g., 5m, 1h, 1d).'
     )
     parser.add_argument(
         '--model',
@@ -1144,6 +1158,14 @@ if __name__ == "__main__":
     if not (0 < args.train_ratio < 1):
          logger.error(f"Invalid --train_ratio value: {args.train_ratio}. Must be between 0.0 and 1.0 (exclusive).")
          sys.exit(1)
+
+    model_specific_config_for_val_check = MODEL_CONFIG.get(args.model, {})
+    val_ratio_check = model_specific_config_for_val_check.get('val_ratio', 0.1)
+
+    if not (0.0 <= val_ratio_check < 1.0 and (args.train_ratio + val_ratio_check) <= 1.0):
+         logger.error(f"Invalid val_ratio value ({val_ratio_check}) or combination with train_ratio ({args.train_ratio}). Ensure 0 <= val_ratio, and train_ratio + val_ratio <= 1.")
+         sys.exit(1)
+
 
     try:
         analyse_model_pipeline(

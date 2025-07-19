@@ -16,7 +16,7 @@ from sklearn.metrics import (balanced_accuracy_score, classification_report,
                              confusion_matrix, accuracy_score)
 from sklearn.model_selection import TimeSeriesSplit # Keep TimeSeriesSplit for potential CV within trainer (though tuning is in train_model)
 from sklearn.preprocessing import StandardScaler
-
+from sklearn.decomposition import PCA # Import PCA
 
 from pandas import Int8Dtype
 
@@ -122,6 +122,16 @@ class ModelTrainer:
         self.model_params = config.get('params', {}).copy()
         # Get the optional list of features to use
         self.features_to_use: Optional[List[str]] = config.get('features_to_use')
+
+        # --- PCA Configuration ---
+        self.pca_enabled = config.get('dimensionality_reduction', {}).get('enabled', False)
+        self.pca_method = config.get('dimensionality_reduction', {}).get('method', 'pca')
+        self.pca_params = config.get('dimensionality_reduction', {}).get('params', {})
+        if self.pca_enabled:
+            self.logger.info(f"PCA enabled with method: {self.pca_method}, params: {self.pca_params}")
+            if self.pca_method != 'pca':
+                self.logger.warning(f"Unsupported PCA method: {self.pca_method}. Only 'pca' is supported.")
+                self.pca_enabled = False # Disable if method is not supported
 
 
         if self.model_type is None:
@@ -245,6 +255,7 @@ class ModelTrainer:
         """
         Creates and fits a ColumnTransformer for preprocessing.
         Applies StandardScaler to all numeric features in the specified subset or all numeric features.
+        Optionally includes a PCA step after StandardScaler if PCA is enabled in config.
 
         Args:
             X (pd.DataFrame): The input DataFrame containing features.
@@ -284,9 +295,21 @@ class ModelTrainer:
              self.feature_columns_processed = [] # Use processed attribute
         else:
             self.logger.info(f"Applying StandardScaler to numeric features: {numeric_features}")
+
+            # Create a pipeline for numeric features: StandardScaler -> (Optional) PCA
+            numeric_transformer_steps = [('scaler', StandardScaler())]
+
+            if self.pca_enabled and self.pca_method == 'pca':
+                self.logger.info(f"Adding PCA step with params: {self.pca_params}")
+                # Initialize PCA with parameters from config
+                pca = PCA(**self.pca_params)
+                numeric_transformer_steps.append(('pca', pca))
+
+            numeric_transformer = Pipeline(steps=numeric_transformer_steps)
+
             preprocessor = ColumnTransformer(
                 transformers=[
-                    ('num', StandardScaler(), numeric_features)
+                    ('num', numeric_transformer, numeric_features)
                 ],
                 remainder='passthrough' # Keep other columns (e.g., potential non-numeric in original X, though they shouldn't be features)
             )
@@ -302,9 +325,20 @@ class ModelTrainer:
             # features, they should largely remain the original names.
             # A more robust way to get feature names out:
             try:
-                 # This method is available in newer scikit-learn versions
-                 self.feature_columns_processed = preprocessor.get_feature_names_out().tolist()
-                 self.logger.info(f"Feature columns after preprocessing: {self.feature_columns_processed}")
+                # This method is available in newer scikit-learn versions
+                # If PCA is enabled, names will be like 'num__pca0', 'num__pca1', etc.
+                self.feature_columns_processed = preprocessor.get_feature_names_out().tolist()
+                self.logger.info(f"Feature columns after preprocessing: {self.feature_columns_processed}")
+
+                # If PCA was applied and n_components was a float (variance explained),
+                # log the actual number of components found by PCA
+                if self.pca_enabled and self.pca_method == 'pca':
+                    # Access the fitted PCA model within the pipeline
+                    fitted_pca = preprocessor.named_transformers_['num'].named_steps['pca']
+                    actual_n_components = fitted_pca.n_components_
+                    self.logger.info(f"PCA reduced features to {actual_n_components} components.")
+                    self.logger.info(f"Explained variance ratio: {fitted_pca.explained_variance_ratio_.sum():.4f}")
+
             except AttributeError:
                  # Fallback for older scikit-learn versions or simpler cases
                  self.logger.warning("get_feature_names_out not available. Assuming feature columns are the original numeric features.")
@@ -532,6 +566,7 @@ class ModelTrainer:
 
         else: # Scikit-learn compatible models (RandomForest, XGBoost, etc.)
             # Define the steps for the scikit-learn pipeline
+            # The preprocessor is created and fitted separately and then used as the first step
             steps = [('preprocessor', self.preprocessor)]
 
             # Handle class imbalance using imblearn samplers if configured
@@ -774,7 +809,6 @@ class ModelTrainer:
         #      # Create a Series of NaNs aligned to the original index
         #      return pd.Series(np.nan, index=X.index, dtype=float).astype(Int8Dtype()) # Return NaN predictions
 
-
         # Check for NaN/Inf in scaled prediction data after transformation
         # This check is now handled within the pipeline's preprocessor step.
         # if np.isnan(X_processed).any() or np.isinf(X_processed).any():
@@ -820,7 +854,6 @@ class ModelTrainer:
 
 
              # Prepare sequences for prediction
-             # Use a dummy y_mapped as labels are not needed for prediction sequence creation
              dummy_y_mapped = np.zeros(X_scaled.shape[0], dtype=int)
              X_sequences, _ = self._prepare_lstm_sequences(X_scaled, dummy_y_mapped)
 
@@ -1071,7 +1104,10 @@ class ModelTrainer:
             'model_params': self.model_params, # Store the parameters used to initialize the model
             'sequence_length_bars': self.sequence_length, # Store sequence length for LSTM
             'save_timestamp': datetime.now().isoformat(), # Record save time
-            'features_to_use': self.features_to_use # Save the optional feature subset used
+            'features_to_use': self.features_to_use, # Save the optional feature subset used
+            'pca_enabled': self.pca_enabled, # Save PCA enabled status
+            'pca_method': self.pca_method,   # Save PCA method
+            'pca_params': self.pca_params    # Save PCA parameters
         }
 
         try:
@@ -1191,6 +1227,13 @@ class ModelTrainer:
             self.sequence_length = metadata.get('sequence_length_bars', metadata.get('sequence_length', 1))
             # Load the optional features_to_use list from metadata
             self.features_to_use = metadata.get('features_to_use')
+            # Load PCA configuration from metadata
+            self.pca_enabled = metadata.get('pca_enabled', False)
+            self.pca_method = metadata.get('pca_method', 'pca')
+            self.pca_params = metadata.get('pca_params', {})
+            if self.pca_enabled:
+                self.logger.info(f"Loaded PCA configuration: enabled={self.pca_enabled}, method={self.pca_method}, params={self.pca_params}")
+
 
             # Log warnings if crucial metadata is missing
             if self.feature_columns_processed is None:
@@ -1358,4 +1401,3 @@ class ModelTrainer:
 
         self.logger.info(f"ModelTrainer instance loaded successfully for {self.model_type}.")
         return self
-
