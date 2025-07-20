@@ -38,7 +38,7 @@ sys.path.insert(0, str(PROJECT_ROOT))
 # Import configuration and utilities
 try:
     from config.paths import PATHS
-    from config.params import STRATEGY_CONFIG # Import for default horizons
+    from config.params import STRATEGY_CONFIG, LABELING_CONFIG # Import LABELING_CONFIG for fee/slippage
     from utils.data_manager import DataManager
     from utils.label_analyzer import LabelAnalyzer # Import LabelAnalyzer
     from utils.logger_config import setup_rotating_logging
@@ -147,7 +147,42 @@ def analyze_labels_pipeline(symbol: str, interval: str, label_strategy: str, fut
     # --- 3. Initialize LabelAnalyzer and Perform Analyses ---
     logger.info("Initializing LabelAnalyzer...")
     try:
-        analyzer = LabelAnalyzer(paths=PATHS, logger=logger)
+        # Determine which fee/slippage to use based on the active labeling strategy
+        # This logic should mirror how the labeling strategy itself gets its fees
+        fee_param = 0.0
+        slippage_param = 0.0
+        f_window_param = 0 # Default, will be set below
+
+        # Get f_window from LABELING_CONFIG for the specific strategy
+        # This ensures the analyzer uses the same f_window as the label generator
+        if label_strategy == 'net_forward_return_quantile':
+            fee_param = LABELING_CONFIG.get('fee', 0.0)
+            slippage_param = LABELING_CONFIG.get('slippage', 0.0)
+            f_window_param = LABELING_CONFIG.get('f_window', 150)
+        elif label_strategy == 'future_range_dominance':
+            fee_param = LABELING_CONFIG.get('fee_range', 0.0)
+            slippage_param = LABELING_CONFIG.get('slippage_range', 0.0)
+            f_window_param = LABELING_CONFIG.get('f_window_range', 40)
+        elif label_strategy == 'triple_barrier':
+            # Triple barrier doesn't have explicit 'fee'/'slippage' in its direct config
+            # but relies on the overall trading_fee_rate/slippage_tolerance_pct from STRATEGY_CONFIG
+            fee_param = STRATEGY_CONFIG.get('trading_fee_rate', 0.0)
+            slippage_param = STRATEGY_CONFIG.get('slippage_tolerance_pct', 0.0)
+            f_window_param = LABELING_CONFIG.get('max_holding_bars', 100) # Use max_holding_bars as f_window
+        elif label_strategy == 'ema_return_percentile':
+            fee_param = LABELING_CONFIG.get('fee', 0.0)
+            slippage_param = STRATEGY_CONFIG.get('slippage_tolerance_pct', 0.0)
+            f_window_param = LABELING_CONFIG.get('f_window', 100) # Assuming f_window exists in its config
+
+        # Fallback if f_window_param is still 0 (not set by specific strategy logic)
+        if f_window_param == 0:
+            # Use the first value from analysis_future_horizons as a reasonable default for f_window
+            # This is a heuristic, ideally each labeling strategy config should define its primary f_window
+            f_window_param = STRATEGY_CONFIG.get('analysis_future_horizons', [150])[0]
+            logger.warning(f"Could not determine specific f_window for strategy '{label_strategy}'. Using default from analysis_future_horizons: {f_window_param}")
+
+
+        analyzer = LabelAnalyzer(paths=PATHS, logger=logger, fee=fee_param, slippage=slippage_param, f_window=f_window_param)
         logger.info(f"Performing all analyses for {symbol} {interval} with strategy '{label_strategy}'...")
 
         # Pass the combined DataFrame to the analyzer
@@ -195,8 +230,8 @@ if __name__ == "__main__":
         '--future-horizons',
         type=int,
         nargs='*', # 0 or more arguments
-        default=STRATEGY_CONFIG.get('analysis_future_horizons', [5, 10, 20, 50, 100]), # Default from config
-        help='List of future bars (integers) to analyze returns over. E.g., --future-horizons 10 20 30. Defaults to config setting.'
+        default=STRATEGY_CONFIG.get('analysis_future_horizons', [5, 10, 20, 50, 100, 150, 200]), # Default from config
+        help='List of future bars (integers) to analyze returns over. E.g., --future-horizons 10 30 60. Defaults to config setting.'
     )
 
     args = parser.parse_args()

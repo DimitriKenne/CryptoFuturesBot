@@ -199,8 +199,36 @@ def create_labels_pipeline(symbol: str, interval: str, label_strategy: str):
     # --- 7. Perform Label Analysis and Plotting using LabelAnalyzer ---
     logger.info(f"Performing label analysis for {symbol} {interval} using LabelAnalyzer...")
     try:
-        # Instantiate LabelAnalyzer
-        analyzer = LabelAnalyzer(paths=PATHS, logger=logger)
+        # Determine which fee/slippage to use based on the active labeling strategy
+        # This logic should mirror how the labeling strategy itself gets its fees
+        fee_param = 0.0
+        slippage_param = 0.0
+        f_window_param = 0 # Default, will be set below
+
+        if label_strategy == 'net_forward_return_quantile':
+            fee_param = labeling_config.get('fee', 0.0)
+            slippage_param = labeling_config.get('slippage', 0.0)
+            f_window_param = labeling_config.get('f_window', 150) # Get f_window for this strategy
+        elif label_strategy == 'future_range_dominance':
+            fee_param = labeling_config.get('fee_range', 0.0)
+            slippage_param = labeling_config.get('slippage_range', 0.0)
+            f_window_param = labeling_config.get('f_window_range', 40) # Get f_window for this strategy
+        elif label_strategy == 'triple_barrier':
+            fee_param = STRATEGY_CONFIG.get('trading_fee_rate', 0.0)
+            slippage_param = STRATEGY_CONFIG.get('slippage_tolerance_pct', 0.0)
+            # For triple barrier, f_window is conceptually max_holding_bars
+            f_window_param = labeling_config.get('max_holding_bars', 100)
+        elif label_strategy == 'ema_return_percentile':
+            fee_param = labeling_config.get('fee', 0.0)
+            slippage_param = STRATEGY_CONFIG.get('slippage_tolerance_pct', 0.0)
+            # For EMA Return Percentile, f_window might be its 'f_window' or a similar lookahead
+            f_window_param = labeling_config.get('f_window', 100) # Assuming it has an f_window parameter
+
+        # Fallback for any other strategy or if not found
+        if f_window_param == 0: # If not set by specific strategy logic above
+             f_window_param = labeling_config.get('f_window', STRATEGY_CONFIG.get('analysis_future_horizons', [150])[0]) # Use a default or first analysis horizon
+
+        analyzer = LabelAnalyzer(paths=PATHS, logger=logger, fee=fee_param, slippage=slippage_param, f_window=f_window_param)
         # Pass the df_combined_for_analysis (which contains OHLCV, features, and the 'label' column)
         # to the analyzer for comprehensive analysis.
         analyzer.perform_all_analyses(
@@ -208,7 +236,7 @@ def create_labels_pipeline(symbol: str, interval: str, label_strategy: str):
             symbol=symbol,
             interval=interval,
             label_strategy=label_strategy, # Pass the strategy name for folder creation (analysis output still uses it)
-            future_horizons=STRATEGY_CONFIG.get('analysis_future_horizons', [5, 10, 20, 50, 100]) # Use config or default
+            future_horizons=STRATEGY_CONFIG.get('analysis_future_horizons', [5, 10, 20, 50, 100, 150, 200]) # Use config or default
         )
         logger.info("Label analysis complete using LabelAnalyzer.")
 
@@ -263,13 +291,13 @@ if __name__ == "__main__":
     Usage examples:
 
     Generate labels using the simple directional strategy:
-        python scripts/create_labels.py --symbol BTCUSDT --interval 1h --label-strategy directional_ternary
+        python scripts/create_labels.py --symbol BTCUSDT --interval 1h --label-strategy net_forward_return_quantile
 
     Generate labels using the triple barrier strategy:
         python scripts/create_labels.py --symbol ADAUSDT --interval 5m --label-strategy triple_barrier
 
     Generate labels using the max return quantile strategy:
-        python scripts/create_labels.py --symbol ADAUSDT --interval 15m --label-strategy max_return_quantile
+        python scripts/create_labels.py --symbol ADAUSDT --interval 15m --label-strategy future_range_dominance
 
     Ensure you have processed data files (including necessary features like ATR columns if using triple_barrier)
     in your data/processed directory, and that config/params.py and config/paths.py are correct.

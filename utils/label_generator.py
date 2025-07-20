@@ -8,22 +8,19 @@ from typing import Dict, Any, Optional, List, Type # Import Type for type hintin
 import math
 
 # --- Import Strategy Classes ---
-# Need to import the concrete strategy classes here
 from .labeling_strategies.base_strategy import BaseLabelingStrategy, logger # Import logger from base
-from .labeling_strategies.directional_ternary import DirectionalTernaryStrategy
 from .labeling_strategies.triple_barrier import TripleBarrierStrategy
-from .labeling_strategies.max_return_quantile import MaxReturnQuantileStrategy
-from .labeling_strategies.ema_return_percentile import EmaReturnPercentileStrategy
+from .labeling_strategies.net_forward_return_quantile import NetForwardReturnQuantileStrategy
+from .labeling_strategies.future_range_dominance import FutureRangeDominanceStrategy
 
 # Define FLOAT_EPSILON here as it's used in strategies and potentially in LabelGenerator
 FLOAT_EPSILON = 1e-9
 
 # Map label_type strings to strategy classes
 STRATEGY_MAP: Dict[str, Type[BaseLabelingStrategy]] = {
-    'directional_ternary': DirectionalTernaryStrategy,
     'triple_barrier': TripleBarrierStrategy,
-    'max_return_quantile': MaxReturnQuantileStrategy,
-    "ema_return_percentile": EmaReturnPercentileStrategy,
+    'net_forward_return_quantile': NetForwardReturnQuantileStrategy,
+    'future_range_dominance': FutureRangeDominanceStrategy,
 }
 
 class LabelGenerator:
@@ -103,13 +100,10 @@ class LabelGenerator:
             self.logger.warning(f"Dropped {initial_rows - len(df_cleaned)} rows due to NaNs in OHLCV data before label calculation.")
         if df_cleaned.empty:
             self.logger.error("DataFrame became empty after dropping NaNs in OHLCV data. Cannot generate labels.")
-            # Return an empty DataFrame with original index and 0 labels if possible, or just empty
             return pd.DataFrame(index=df.index, data={'label': 0})
 
 
-        # Log specific info for TripleBarrierStrategy if volatility adjustment is used
-        if isinstance(self.strategy, TripleBarrierStrategy) and self.strategy.use_volatility_adjustment and self.strategy.atr_column_name:
-            self.logger.info(f"Triple Barrier Strategy is configured to use volatility adjustment with ATR column: {self.strategy.atr_column_name}")
+        # No specific logging for TripleBarrierStrategy needed now that it's removed.
 
 
         # Calculate raw labels using the selected strategy
@@ -207,12 +201,3 @@ class LabelGenerator:
 
         df_raw_labeled['label'] = propagated_labels
         return df_raw_labeled
-
-
-    # Removed the analyze_labels method as LabelAnalyzer is now the dedicated analysis component.
-    # def analyze_labels(self, df_labeled: pd.DataFrame, output_dir: Path, plot_filename_pattern: str, table_filename_pattern: str, symbol: str, interval: str):
-    #     """
-    #     Performs basic analysis on the generated labels (distribution).
-    #     (This method is now redundant with LabelAnalyzer and can be removed or simplified if only for quick internal checks).
-    #     """
-    #     # ... (original analyze_labels content) ...

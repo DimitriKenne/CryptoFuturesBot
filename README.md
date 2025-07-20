@@ -74,13 +74,11 @@ This project was initiated in **April 2025**, directly inspired by the research 
 
     * **Triple Barrier Method (triple_barrier)**: A robust technique that defines profit, loss, and time barriers. Labels are assigned based on which barrier is hit first within a forward-looking window. This strategy supports dynamic barrier levels adjusted by market volatility (e.g., Average True Range - ATR) for adaptive risk management.
 
-    * **Directional Ternary Strategy (directional_ternary)**: A simpler approach that labels based on a predefined percentage price change within a forward window. A positive change exceeding the threshold results in a 'Long' label, a negative change below the threshold results in a 'Short' label, and anything in between is 'Neutral'.
+* **Net Forward Return Quantile Strategy (net_forward_return_quantile)**: This strategy labels based on the *net* percentage return (accounting for fees and slippage) over a forward window. It assigns 'Long' or 'Short' labels if the net future return exceeds a specific quantile threshold for positive or negative movements, ensuring signals target genuinely profitable moves.
 
-    * **Max Return Quantile Strategy (max_return_quantile)**: This strategy identifies "significant" price movements by analyzing the maximum favorable excursion within a forward window. It assigns 'Long' or 'Short' labels if the maximum future return (or inverse for shorts) falls within a specified quantile of historical returns, indicating a strong potential move.
+    * **Future Range Dominance Strategy (future_range_dominance)**: This strategy identifies labels based on the ratio of the highest potential net profit in one direction (long or short) to the highest potential net profit in the *opposite* direction within a forward window. It assigns 'Long' or 'Short' labels if one direction's potential net profit significantly dominates the other, and both meet a minimum profitability threshold, aiming for high-conviction, directional moves.
 
-    * **EMA Return Percentile Strategy (ema_return_percentile)**: A custom strategy that combines Exponential Moving Average (EMA) based trend analysis with percentile thresholds for future returns. It assigns labels based on the price's position relative to the EMA and whether the future return exceeds a certain percentile, aiming to capture trend-aligned, significant movements.
-
-    * **Label Propagation Smoothing**: All strategies incorporate a configurable min_holding_period to smooth raw labels. This ensures that a generated signal persists for a minimum number of bars, which helps to filter out high-frequency noise and create more stable, actionable training targets for the models.
+    * **Label Propagation Smoothing**: All strategies incorporate a configurable **`min_holding_period`** to smooth raw labels. This ensures that a generated signal persists for a minimum number of bars, which helps to filter out high-frequency noise and create more stable, actionable training targets for the models.
 
 * **Comprehensive Logging**: Detailed, rotating logging for all stages of bot operation, backtesting, and data processing, facilitating debugging and performance monitoring.
 
@@ -353,14 +351,14 @@ Ensure `config/params.py` (with `FEATURE_CONFIG` and `STRATEGY_CONFIG`) and `con
 
 Generate labels for model training using a chosen strategy.
 
-* Generate labels using the simple directional strategy:
-    `python scripts/create_labels.py --symbol BTCUSDT --interval 1h --label-strategy directional_ternary`
+* Generate labels using the net forward return quantile strategy:
+    `python scripts/create_labels.py --symbol BTCUSDT --interval 1h --label-strategy net_forward_return_quantile`
+
+* Generate labels using the future range dominance strategy:
+    `python scripts/create_labels.py --symbol ADAUSDT --interval 5m --label-strategy future_range_dominance`
 
 * Generate labels using the triple barrier strategy:
-    `python scripts/create_labels.py --symbol ADAUSDT --interval 5m --label-strategy triple_barrier`
-
-* Generate labels using the max return quantile strategy:
-    `python scripts/create_labels.py --symbol ADAUSDT --interval 15m --label-strategy max_return_quantile`
+    `python scripts/create_labels.py --symbol ADAUSDT --interval 15m --label-strategy triple_barrier`
 
 Ensure you have processed data files (including necessary features like ATR columns if using triple_barrier) in your `data/processed` directory, and that `config/params.py` and `config/paths.py` are correct. The feature generation script must produce an ATR column named `atr_{lookback}` (e.g., `atr_14`) matching the `vol_adj_lookback` parameter in `LABELING_CONFIG` if using the triple_barrier strategy, and save it to the processed data file.
 
@@ -415,9 +413,9 @@ Ensure you have processed data files in your `data/processed` directory, labeled
 
 ### **scripts/monte_carlo_backtest.py**
 
-Orchestrates advanced Monte Carlo backtests using GARCH-simulated price paths. This script allows you to evaluate your ML-based strategy's performance across many alternative market scenarios, providing a more robust assessment of risk and potential returns.
+Orchestrates advanced Monte Carlo backtests using (GARCH+jump)-simulated price paths. This script allows you to evaluate your ML-based strategy's performance across many alternative market scenarios, providing a more robust assessment of risk and potential returns.
 
-* Run Monte Carlo simulations with GARCH(1,1) price path generation for the LSTM model on ADAUSDT 5m data:
+* Run Monte Carlo simulations with GARCH(1,1)+jump price path generation for the LSTM model on ADAUSDT 5m data:
     `python scripts/monte_carlo_backtest.py --symbol ADAUSDT --interval 5m --model lstm --num_simulations 100`
 
 Ensure you have processed data files in your `data/processed` directory and trained model files in your `models/trained_models` directory. `config/params.py` (with `MODEL_CONFIG`, `GENERAL_CONFIG`, `STRATEGY_CONFIG`, `BACKTESTER_CONFIG`, `FEATURE_CONFIG`) and `config/paths.py` are correctly configured.

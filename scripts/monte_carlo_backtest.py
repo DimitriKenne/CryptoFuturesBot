@@ -8,25 +8,28 @@ like an extension of the deterministic backtester.
 Workflow:
 1.  Loads historical data and splits it into train/test sets based on user-defined mode.
 2.  Runs a standard, deterministic backtest on the actual test data to establish a baseline.
-3.  Fits a GARCH(1,1) model to the returns of the training data set.
-4.  Loads a pre-trained ML model for signal generation.
-5.  Loops for a specified number of simulations:
-    a. Generates a synthetic OHLCV data path with the and length as the test set.
+3.  Fits a GARCH(1,1) model to the returns of the training data set (diffusion component).
+4.  Estimates jump parameters from GARCH residuals.
+5.  Generates synthetic OHLCV data paths incorporating GARCH-modeled diffusion and a Poisson-driven jump process.
+6.  Loads a pre-trained ML model for signal generation.
+7.  Loops for a specified number of simulations:
+    a. Generates a synthetic OHLCV data path with the same length as the test set.
     b. Runs the full feature engineering -> signal generation -> backtesting pipeline.
     c. Stores the summary metrics and the full equity curve from each run.
-6.  Aggregates all results and uses a dedicated analyzer to generate and save:
+8.  Aggregates all results and uses a dedicated analyzer to generate and save:
     a. Statistical summary of performance metrics (CSV).
     b. Distribution plots for key metrics (e.g., Total Return).
     c. A comparative plot of simulated equity curves vs. the deterministic baseline.
     d. A risk/reward scatter plot (Return vs. Drawdown).
-7.  Saves all artifacts to a dedicated, non-conflicting subdirectory to keep results safe.
+    e. A sample of simulated OHLCV paths.
+9.  Saves all artifacts to a dedicated, non-conflicting subdirectory to keep results safe.
 """
 
 import argparse
 import logging
 import sys
 from pathlib import Path
-from typing import Optional
+from typing import Optional, List
 import pandas as pd
 import numpy as np
 import copy
@@ -52,13 +55,13 @@ try:
     from config.paths import PATHS
     from utils.data_manager import DataManager
     from utils.model_trainer import ModelTrainer
-    from utils.features_engineer import FeaturesEngineer # Corrected class name
+    from utils.features_engineer import FeaturesEngineer
     from utils.backtester import Backtester
     from utils.logger_config import setup_rotating_logging
-    from arch import arch_model
+    from arch import arch_model # Re-introducing arch for GARCH
 except ImportError as e:
     print(f"ERROR: Failed to import necessary project modules: {e}", file=sys.stderr)
-    print("Please ensure all dependencies are installed (including 'arch', 'tqdm', 'seaborn') and paths are correct.", file=sys.stderr)
+    print("Please ensure all dependencies are installed (including 'tqdm', 'seaborn', 'arch') and paths are correct.", file=sys.stderr)
     sys.exit(1)
 
 # --- Logger Setup ---
@@ -66,112 +69,209 @@ setup_rotating_logging("mc_backtest")
 logger = logging.getLogger(__name__)
 
 
-class GarchOHLCVSimulator:
-    """Fits a GARCH model and generates synthetic OHLCV data paths."""
+class PricePathSimulator:
+    """
+    Fits a GARCH model for the diffusion component and generates synthetic OHLCV data paths
+    with an added jump component. Parameters for both are estimated from historical data.
+    """
     def __init__(self, historical_data: pd.DataFrame):
         if not all(col in historical_data.columns for col in ['open', 'high', 'low', 'close', 'volume']):
             raise ValueError("Historical data must contain OHLCV columns.")
         self.hist_data = historical_data
         self.hist_returns = historical_data['close'].pct_change().dropna()
-        self.fitted_model = None
-        self._learn_historical_patterns()
+        self.fitted_garch_model = None
+        self.mean_drift = self.hist_returns.mean() # Mean drift from historical returns
+
+        # Scaling factor for GARCH model fitting
+        self.garch_scale_factor = 1000.0 # Recommended by arch warning
+
+        # Initialize jump parameters to defaults, will be estimated later
+        self.jump_intensity_lambda = 0.001 # Default small value
+        self.jump_mean = 0.0
+        self.jump_std = 0.001 # Default small value
+
+        self._learn_historical_patterns() # Learn OHLC ratios and volume distribution
+        self.fit_garch_model() # Fit GARCH model
+        self._estimate_jump_parameters() # Estimate jump parameters from GARCH residuals
 
     def _learn_historical_patterns(self):
         """Analyzes historical data to learn distributions for OHLC and Volume."""
-        self.hist_hl_range_ratio = ((self.hist_data['high'] - self.hist_data['low']) / self.hist_data['close']).replace(0, np.nan).dropna()
-        self.hist_open_gap_ratio = (self.hist_data['open'] - self.hist_data['close'].shift(1)) / self.hist_data['close'].shift(1)
-        self.hist_open_gap_ratio.dropna(inplace=True)
+        # These ratios will be used to reconstruct OHLC from simulated close prices
+        # Calculate relative movements based on previous close
+        self.hist_open_to_prev_close_ratio = (self.hist_data['open'] / self.hist_data['close'].shift(1)).dropna()
+        self.hist_high_to_close_ratio = (self.hist_data['high'] / self.hist_data['close']).dropna()
+        self.hist_low_to_close_ratio = (self.hist_data['low'] / self.hist_data['close']).dropna()
         self.hist_volume = self.hist_data['volume'].dropna()
 
     def fit_garch_model(self, p=1, q=1, dist='t'): # Changed 'Students-t' to 't'
-        """Fits a GARCH(p, q) model to the historical returns."""
-        logger.info(f"Fitting GARCH(p={p}, q={q}) model with '{dist}' distribution...")
+        """Fits a GARCH(p, q) model to the historical returns (diffusion component)."""
+        logger.info(f"Fitting GARCH(p={p}, q={q}) model with '{dist}' distribution for diffusion component...")
         if self.hist_returns.empty:
-            raise ValueError("Cannot fit GARCH model on empty returns series.")
-        # Multiply returns by 100 as arch often expects percentage returns
-        # Added rescale=False to suppress the DataScaleWarning.
-        # If you want to explicitly rescale, remove rescale=False and adjust the multiplication factor (e.g., * 10000)
-        garch_model = arch_model(self.hist_returns * 100, p=p, q=q, vol='Garch', dist=dist, rescale=False)
-        self.fitted_model = garch_model.fit(disp='off')
-        logger.info("GARCH model fitting complete.")
+            logger.warning("Historical returns series is empty. Cannot fit GARCH model.")
+            self.fitted_garch_model = None
+            return
+        
+        # Check for constant returns, which can cause issues with GARCH
+        if self.hist_returns.std() < 1e-9:
+            logger.warning("Historical returns have zero variance. GARCH model cannot be fitted. Simulating with constant returns.")
+            self.fitted_garch_model = None # Indicate no GARCH model fitted
+            return
+
+        # Rescale returns before passing to arch_model to improve numerical stability
+        scaled_returns = self.hist_returns * self.garch_scale_factor
+        
+        # Pass scaled returns. Set rescale=False to suppress the DataScaleWarning,
+        # as we are manually handling the scaling.
+        garch_model = arch_model(scaled_returns, p=p, q=q, vol='Garch', dist=dist, rescale=False)
+        try:
+            self.fitted_garch_model = garch_model.fit(disp='off')
+            logger.info("GARCH model fitting complete.")
+        except Exception as e:
+            logger.warning(f"GARCH model fitting failed: {e}. Simulating returns with historical mean and std dev.")
+            self.fitted_garch_model = None # Indicate fitting failed
+
+    def _estimate_jump_parameters(self, jump_threshold_std_dev: float = 3.0):
+        """
+        Estimates jump intensity, mean, and standard deviation from GARCH standardized residuals.
+        """
+        if self.fitted_garch_model is None:
+            logger.warning("GARCH model not fitted. Cannot estimate jump parameters from residuals. Using default jump parameters.")
+            return
+
+        # Standardized residuals should have mean 0 and std dev 1 if model is correct
+        # Note: residuals and conditional_volatility from fitted_garch_model are already scaled
+        # if the input returns were scaled.
+        standardized_residuals = self.fitted_garch_model.resid / self.fitted_garch_model.conditional_volatility
+        
+        # Identify potential jumps as outliers in standardized residuals
+        jumps = standardized_residuals[np.abs(standardized_residuals) > jump_threshold_std_dev]
+
+        if not jumps.empty:
+            # Estimate jump intensity (number of jumps per period)
+            self.jump_intensity_lambda = len(jumps) / len(self.hist_returns) # Use original hist_returns length
+            
+            # Estimate jump mean and std from the actual return values of the jumps
+            # Need to get the actual returns corresponding to these jump indices
+            actual_jumps_returns = self.hist_returns.loc[jumps.index]
+            
+            self.jump_mean = actual_jumps_returns.mean()
+            self.jump_std = actual_jumps_returns.std()
+            
+            logger.info(f"Estimated Jump Parameters: Lambda={self.jump_intensity_lambda:.4f}, Mean={self.jump_mean:.4f}, Std={self.jump_std:.4f}")
+        else:
+            logger.info("No significant jumps detected in GARCH residuals. Using default (or very small) jump parameters.")
+            # Keep initialized small default values if no jumps are found
+            self.jump_intensity_lambda = 0.001
+            self.jump_mean = 0.0
+            self.jump_std = 0.001
+
 
     def simulate_one_path(self, num_periods: int, start_date: pd.Timestamp, freq) -> Optional[pd.DataFrame]:
-        """Generates a single, full synthetic OHLCV data path."""
-        if self.fitted_model is None:
-            logger.error("GARCH model not fitted. Call fit_garch_model() first.")
-            return None
+        """
+        Generates a single, full synthetic OHLCV data path
+        incorporating GARCH-modeled diffusion and a jump component.
+        """
+        if self.fitted_garch_model is None:
+            logger.warning("GARCH model not fitted (possibly due to constant returns or fitting failure). Simulating returns with historical mean and std dev without GARCH dynamics.")
+            # Fallback: simple normal distribution if GARCH couldn't be fitted
+            sim_returns_base = np.random.normal(self.mean_drift, self.hist_returns.std(), num_periods)
+        else:
+            # Get the last conditional variance from the historical data for simulation start
+            # Remember to unscale the variance if returns were scaled during fitting
+            last_variance_scaled = self.fitted_garch_model.conditional_volatility.iloc[-1]**2
+            last_variance = last_variance_scaled / (self.garch_scale_factor**2)
+            
+            # Extract GARCH parameters
+            params = self.fitted_garch_model.params
+            omega_scaled = params['omega']
+            alpha = params['alpha[1]']
+            beta = params['beta[1]']
+            nu = params.get('nu', np.inf) # Degrees of freedom for Students-t
 
-        # Get the last price and last conditional variance from the historical data for simulation start
-        last_price = self.hist_data['close'].iloc[-1]
-        # Convert variance back from percentage (if returns were multiplied by 100)
-        # Changed [-1] to .iloc[-1] for positional indexing
-        last_variance = self.fitted_model.conditional_volatility.iloc[-1]**2 / (100**2)
+            # Unscale omega for simulation
+            omega = omega_scaled / (self.garch_scale_factor**2)
+
+            sim_returns_base = np.zeros(num_periods)
+            current_variance = last_variance
+
+            for t in range(num_periods):
+                # 1. Diffusion Component (GARCH)
+                if self.fitted_garch_model.model.distribution.name == 'StudentsT':
+                    # For Students-t, draw from t-distribution and scale by sqrt((nu-2)/nu) for unit variance
+                    random_shock_diffusion = np.random.standard_t(df=nu) * np.sqrt((nu - 2) / nu)
+                else: # Assume Normal distribution if not Students-t
+                    random_shock_diffusion = np.random.normal()
+                
+                # The diffusion_return is the innovation scaled by conditional volatility
+                diffusion_return = self.mean_drift + random_shock_diffusion * np.sqrt(current_variance)
+                sim_returns_base[t] = diffusion_return
+                
+                # Update conditional variance for the next period using the diffusion component
+                current_variance = omega + alpha * (diffusion_return**2) + beta * current_variance
         
-        # Extract GARCH parameters
-        params = self.fitted_model.params
-        # Adjust omega back to non-percentage scale if returns were scaled
-        omega = params['omega'] / (100**2)
-        alpha = params['alpha[1]']
-        beta = params['beta[1]']
-        nu = params.get('nu', np.inf) # Degrees of freedom for Students-t
-
-        sim_returns = np.zeros(num_periods)
-        current_variance = last_variance
+        # 2. Jump Component (Poisson Process) - apply to the base returns
+        num_jumps_per_period = np.random.poisson(self.jump_intensity_lambda, num_periods)
+        jump_returns = np.zeros(num_periods)
         for t in range(num_periods):
-            # Generate random shock based on the specified distribution
-            # Corrected access to distribution name
-            if self.fitted_model.model.distribution.name == 'StudentsT':
-                # For Students-t, generate from standard t distribution and scale
-                random_shock = np.random.standard_t(df=nu) * np.sqrt((nu - 2) / nu)
-            else: # Assume Normal distribution if not Students-t
-                random_shock = np.random.normal()
-            
-            # Generate return based on current conditional volatility
-            sim_returns[t] = random_shock * np.sqrt(current_variance)
-            
-            # Update conditional variance for the next period
-            current_variance = omega + alpha * (sim_returns[t]**2) + beta * current_variance
+            if num_jumps_per_period[t] > 0:
+                jump_sizes = np.random.normal(self.jump_mean, self.jump_std, num_jumps_per_period[t])
+                jump_returns[t] = np.sum(jump_sizes)
         
+        # Total return is base (diffusion + drift) + jump
+        sim_returns = sim_returns_base + jump_returns
+
         # Calculate simulated close prices
-        sim_close_prices = last_price * (1 + sim_returns).cumprod()
+        sim_close_prices = self.hist_data['close'].iloc[-1] * (1 + sim_returns).cumprod()
 
         # Create DataFrame for synthetic path
-        synthetic_path = pd.DataFrame(index=pd.date_range(start=start_date, periods=num_periods, freq=freq))
-        synthetic_path['close'] = sim_close_prices
+        synthetic_df = pd.DataFrame(index=pd.date_range(start=start_date, periods=num_periods, freq=freq))
+        synthetic_df['close'] = sim_close_prices
         
-        # Simulate 'open' prices based on historical open-close gaps
-        # Need to handle the first 'prev_close' for the first simulated bar
-        # Replaced .append() with pd.concat()
-        prev_close = pd.concat([pd.Series([self.hist_data['close'].iloc[-1]]), synthetic_path['close'].iloc[:-1]], ignore_index=True)
-        open_gaps = np.random.choice(self.hist_open_gap_ratio, size=num_periods)
-        synthetic_path['open'] = prev_close.values * (1 + open_gaps)
+        # Initialize all OHLCV columns with NaN to ensure they exist before assignment
+        synthetic_df['open'] = np.nan
+        synthetic_df['high'] = np.nan
+        synthetic_df['low'] = np.nan
+        synthetic_df['volume'] = np.nan
         
-        # Simulate 'high' and 'low' based on historical high-low ranges
-        hl_range_ratios = np.random.choice(self.hist_hl_range_ratio.clip(0, 0.2), size=num_periods)
-        hl_range = hl_range_ratios * synthetic_path['close']
+        # Reconstruct Open, High, Low based on simulated Close and historical ratios
+        # This is crucial for realistic candle shapes
         
-        # Ensure high is always >= open and close, and low is always <= open and close
-        synthetic_path['high'] = pd.concat([synthetic_path['open'], synthetic_path['close']], axis=1).max(axis=1) + hl_range * np.random.uniform(0, 1, size=num_periods)
-        synthetic_path['low'] = pd.concat([synthetic_path['open'], synthetic_path['close']], axis=1).min(axis=1) - hl_range * np.random.uniform(0, 1, size=num_periods)
+        # Ensure historical ratios are not empty
+        if self.hist_open_to_prev_close_ratio.empty or self.hist_high_to_close_ratio.empty or self.hist_low_to_close_ratio.empty:
+            logger.warning("Historical OHLC ratios are empty. Cannot accurately simulate OHLC. Returning None.")
+            return None
+
+        # Handle the first bar's open, high, low relative to the last historical close
+        # The first synthetic 'open' should be based on the last historical 'close'
+        synthetic_df.loc[synthetic_df.index[0], 'open'] = self.hist_data['close'].iloc[-1] * np.random.choice(self.hist_open_to_prev_close_ratio)
         
+        # For subsequent bars, the 'open' is based on the *previous synthetic close*
+        for i in range(1, num_periods):
+            synthetic_df.loc[synthetic_df.index[i], 'open'] = synthetic_df['close'].iloc[i-1] * np.random.choice(self.hist_open_to_prev_close_ratio)
+
+        # High and Low are relative to their own bar's close
+        synthetic_df['high'] = synthetic_df['close'] * np.random.choice(self.hist_high_to_close_ratio, size=num_periods)
+        synthetic_df['low'] = synthetic_df['close'] * np.random.choice(self.hist_low_to_close_ratio, size=num_periods)
+
         # Final adjustment to ensure high >= open, close, low <= open, close
-        synthetic_path['high'] = pd.concat([synthetic_path['high'], synthetic_path['open'], synthetic_path['close']], axis=1).max(axis=1)
-        synthetic_path['low'] = pd.concat([synthetic_path['low'], synthetic_path['open'], synthetic_path['close']], axis=1).min(axis=1)
+        synthetic_df['high'] = synthetic_df[['high', 'open', 'close']].max(axis=1)
+        synthetic_df['low'] = synthetic_df[['low', 'open', 'close']].min(axis=1)
         
         # Simulate 'volume' based on historical volumes
-        synthetic_path['volume'] = np.random.choice(self.hist_volume, size=num_periods)
+        synthetic_df['volume'] = np.random.choice(self.hist_volume, size=num_periods)
         
-        return synthetic_path[['open', 'high', 'low', 'close', 'volume']]
+        return synthetic_df[['open', 'high', 'low', 'close', 'volume']]
 
 
 class MonteCarloAnalyzer:
     """Handles analysis, plotting, and saving of Monte Carlo results."""
-    def __init__(self, metrics_df: pd.DataFrame, all_equity_curves: list, deterministic_results: dict, output_dir: Path):
+    def __init__(self, metrics_df: pd.DataFrame, all_equity_curves: list, deterministic_results: dict, output_dir: Path, all_simulated_paths: List[pd.DataFrame]):
         self.metrics_df = metrics_df
         self.all_equity_curves = all_equity_curves
         self.deterministic_results = deterministic_results
         self.output_dir = output_dir
         self.output_dir.mkdir(parents=True, exist_ok=True)
+        self.all_simulated_paths = all_simulated_paths # Store all simulated paths
         sns.set_style("darkgrid")
 
     def save_summary_stats(self):
@@ -283,7 +383,7 @@ class MonteCarloAnalyzer:
             return
             
         plt.figure(figsize=(10, 8))
-        sns.scatterplot(data=plot_df, x=x_metric, y=y_metric, alpha=0.6)
+        sns.scatterplot(data=plot_df, x=x_metric, y=y_data, alpha=0.6)
         
         det_x = self.deterministic_results['metrics'].get(x_metric)
         det_y = self.deterministic_results['metrics'].get(y_metric)
@@ -294,6 +394,7 @@ class MonteCarloAnalyzer:
         plt.title('Risk vs. Reward Profile (Each point is one simulation)', fontsize=16)
         plt.xlabel(x_metric.replace("_", " ").title())
         plt.ylabel(y_metric.replace("_", " ").title())
+        plt.grid(True) # Add grid for better readability
         plt.legend()
         plt.tight_layout()
         
@@ -302,6 +403,56 @@ class MonteCarloAnalyzer:
         plt.close()
         logger.info(f"Risk/reward scatter plot saved to {filepath}")
 
+    def plot_simulated_ohlcv_paths(self, num_to_plot=5):
+        """
+        Plots a sample of simulated OHLCV paths (close prices) for visual inspection.
+        """
+        if not self.all_simulated_paths:
+            logger.warning("No simulated OHLCV paths available to plot.")
+            return
+
+        plt.figure(figsize=(15, 8))
+        
+        # Filter out empty paths before sampling
+        non_empty_paths = [path for path in self.all_simulated_paths if not path.empty]
+
+        if not non_empty_paths:
+            logger.warning("All simulated OHLCV paths are empty. Skipping plot.")
+            plt.close()
+            return
+
+        sample_size = min(num_to_plot, len(non_empty_paths))
+        indices_to_plot = np.random.choice(len(non_empty_paths), sample_size, replace=False)
+
+        for i in indices_to_plot:
+            simulated_path = non_empty_paths[i]
+            if isinstance(simulated_path.index, pd.DatetimeIndex):
+                plt.plot(simulated_path.index, simulated_path['close'], alpha=0.6, linewidth=1.5, label=f'Sim {i+1} Close')
+            else:
+                logger.warning(f"Skipping plotting of simulated OHLCV path {i+1} due to non-DatetimeIndex.")
+
+        # Optionally plot the actual test data close for comparison
+        det_ohlcv = self.deterministic_results.get('ohlcv_data') # Assuming you might pass this
+        if det_ohlcv is not None and not det_ohlcv.empty and 'close' in det_ohlcv.columns:
+            if isinstance(det_ohlcv.index, pd.DatetimeIndex):
+                plt.plot(det_ohlcv.index, det_ohlcv['close'], color='black', linewidth=2.0, linestyle='--', label='Actual Test Data Close')
+            else:
+                logger.warning(f"Skipping plotting actual test data OHLCV due to non-DatetimeIndex.")
+
+
+        plt.title(f'Sample of Simulated OHLCV Paths (Close Price) vs. Actual Test Data\n{self.deterministic_results.get("config_symbol", "")} {self.deterministic_results.get("config_interval", "")}', fontsize=16)
+        plt.xlabel('Date')
+        plt.ylabel('Price')
+        plt.legend()
+        plt.grid(True)
+        plt.tight_layout()
+        
+        filepath = self.output_dir / "5_simulated_ohlcv_paths.png"
+        plt.savefig(filepath, dpi=300)
+        plt.close()
+        logger.info(f"Sample of simulated OHLCV paths plot saved to {filepath}")
+
+
     def run_full_analysis(self):
         """Runs all analysis and plotting steps."""
         logger.info("--- Starting Monte Carlo Results Analysis ---")
@@ -309,6 +460,7 @@ class MonteCarloAnalyzer:
         self.plot_performance_distribution(metric='total_return_pct')
         self.plot_equity_curves()
         self.plot_risk_reward_scatter()
+        self.plot_simulated_ohlcv_paths() # New plotting function call
         logger.info("--- Monte Carlo Results Analysis Complete ---")
 
 
@@ -383,7 +535,7 @@ def run_mc_backtest_pipeline(symbol: str, interval: str, model_key: str, backtes
         if test_data_cleaned.empty:
             logger.warning("Deterministic test data is empty after cleaning NaNs. Skipping deterministic backtest.")
             # Create empty results to allow MC loop to proceed
-            deterministic_results = {'trades': pd.DataFrame(), 'equity_curve': pd.Series(dtype=float), 'metrics': {}}
+            deterministic_results = {'trades': pd.DataFrame(), 'equity_curve': pd.Series(dtype=float), 'metrics': {}, 'ohlcv_data': pd.DataFrame()} # Added ohlcv_data
         else:
             predictions = trainer.predict(test_data_cleaned).reindex(test_data_cleaned.index).fillna(0).astype(int)
             probabilities = trainer.predict_proba(test_data_cleaned).reindex(test_data_cleaned.index)
@@ -398,27 +550,24 @@ def run_mc_backtest_pipeline(symbol: str, interval: str, model_key: str, backtes
             )
             # Run with saving enabled to get the standard deterministic result
             det_trades, det_equity, det_metrics = det_backtester.run_backtest()
-            deterministic_results = {'trades': det_trades, 'equity_curve': det_equity, 'metrics': det_metrics}
-            logger.info("Deterministic backtest complete.")
+            deterministic_results = {'trades': det_trades, 'equity_curve': det_equity, 'metrics': det_metrics, 'ohlcv_data': test_data_cleaned.copy()} # Stored test_data_cleaned
+            logger.info("Deterministic backtest complete. Relevant data stored for analysis.") # Updated log message
     except Exception as e:
         logger.critical(f"Deterministic backtest failed, cannot proceed: {e}", exc_info=True)
         sys.exit(1)
 
-    # --- 3. Initialize and Fit GARCH Simulator ---
-    # Ensure train_data has enough history for GARCH fitting (e.g., at least 2 for pct_change)
-    if train_data.empty or len(train_data) < 2:
-        logger.critical("Train data is too short or empty for GARCH model fitting. Exiting.")
+    # --- 3. Initialize PricePathSimulator (GARCH + Jumps) ---
+    if train_data.empty or len(train_data) < 2: # Need at least 2 bars for pct_change for GARCH
+        logger.critical("Train data is too short or empty for PricePathSimulator. Exiting.")
         sys.exit(1)
 
-    simulator = GarchOHLCVSimulator(train_data)
-    try:
-        simulator.fit_garch_model()
-    except Exception as e:
-        logger.critical(f"GARCH model fitting failed: {e}", exc_info=True)
-        sys.exit(1)
+    simulator = PricePathSimulator(train_data) # GARCH fitting and jump estimation now happen in __init__
+    
+    logger.info(f"PricePathSimulator initialized for GARCH + Jumps simulation.")
+
 
     # --- 4. Run Simulation Loop ---
-    all_metrics, all_equity_curves = [], []
+    all_metrics, all_equity_curves, all_simulated_paths = [], [], [] # Added all_simulated_paths
     logger.info("--- Starting Monte Carlo Simulation Loop ---")
     
     # Define a template for expected metrics to ensure consistency
@@ -462,13 +611,23 @@ def run_mc_backtest_pipeline(symbol: str, interval: str, model_key: str, backtes
                 sim_summary_metrics['error'] = 'Empty synthetic data'
                 all_metrics.append(sim_summary_metrics)
                 all_equity_curves.append(sim_equity_curve)
+                all_simulated_paths.append(pd.DataFrame()) # Append empty path
                 continue
             
+            all_simulated_paths.append(synthetic_df.copy()) # Store the generated path
+
             # Feature engineer the synthetic data
             feature_engineer = FeaturesEngineer(config=copy.deepcopy(FEATURE_CONFIG))
             featured_df = feature_engineer.process(synthetic_df)
             
             # Clean features in the synthetic data before prediction, using the same feature columns as the model
+            model_feature_cols = trainer.feature_columns_original # Re-fetch in case it changed (though it shouldn't)
+            if not model_feature_cols:
+                logger.warning("Original feature columns not found in loaded model metadata for simulation. Using features_to_use from config as fallback.")
+                model_feature_cols = MODEL_CONFIG.get(model_key, {}).get('features_to_use', [])
+                if not model_feature_cols:
+                    raise RuntimeError("Could not determine original feature columns used by the model for simulation.")
+
             featured_df_cleaned = featured_df.dropna(subset=model_feature_cols).copy()
             if featured_df_cleaned.empty:
                 logger.warning(f"Simulation {i+1}: Featured data is empty after cleaning NaNs. Skipping.")
@@ -504,6 +663,7 @@ def run_mc_backtest_pipeline(symbol: str, interval: str, model_key: str, backtes
             sim_summary_metrics['error'] = str(e)
             all_metrics.append(sim_summary_metrics)
             all_equity_curves.append(sim_equity_curve) # Append empty or partially filled equity curve
+            all_simulated_paths.append(pd.DataFrame()) # Append empty path if error occurs
 
 
     # --- 5. Aggregate and Analyze Results ---
@@ -515,16 +675,16 @@ def run_mc_backtest_pipeline(symbol: str, interval: str, model_key: str, backtes
     # The results are a form of analysis on a backtest for a specific model
     base_analysis_dir = Path(PATHS.get("backtesting_analysis_dir"))
     # Create a model-specific subfolder, then a subfolder for the MC analysis itself
-    output_dir = base_analysis_dir / model_key / f"{symbol.replace('/', '_')}_{interval}_monte_carlo"
+    output_dir = base_analysis_dir / model_key / f"{symbol.replace('/', '_')}_{interval}_monte_carlo_garch_jumps" # Updated output folder name
 
-    analyzer = MonteCarloAnalyzer(pd.DataFrame(all_metrics), all_equity_curves, deterministic_results, output_dir)
+    analyzer = MonteCarloAnalyzer(pd.DataFrame(all_metrics), all_equity_curves, deterministic_results, output_dir, all_simulated_paths)
     analyzer.run_full_analysis()
 
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="Run advanced Monte Carlo backtests on a trained model.")
     parser.add_argument('--symbol', type=str, required=True, help='Trading pair symbol (e.g., BTCUSDT)')
-    parser.add_argument('--interval', type=str, required=True, help='Time interval (e.g., 1h, 1d)')
+    parser.add_argument('--interval', type=str, required=True, choices=['1m', '5m', '15m', '30m', '1h', '2h', '4h', '6h', '8h', '12h', '1d', '3d', '1w', '1M'], help='Time interval (e.g., 1h, 1d)')
     parser.add_argument('--model', type=str, required=True, choices=list(MODEL_CONFIG.keys()), help='Model key from MODEL_CONFIG')
     parser.add_argument('--backtest_mode', type=str, default='test', choices=['full', 'train', 'test'], help='Data split to use for GARCH fitting and simulation length.')
     parser.add_argument('--train_ratio', type=float, default=GENERAL_CONFIG.get('train_test_split_ratio', 0.8), help='Train/test split ratio.')
@@ -545,4 +705,3 @@ if __name__ == "__main__":
         logger.critical(f"Unhandled exception in pipeline: {e}", exc_info=True)
     finally:
         logging.shutdown()
-

@@ -184,29 +184,36 @@ FEATURE_CONFIG = {
 # Rules for generating target labels for model training.
 LABELING_CONFIG = {
     # Strategy Selection
-    # str: Supported types: 'directional_ternary', 'triple_barrier', 'max_return_quantile', 'ema_return_percentile'.
+    # str: Supported types: 'net_forward_return_quantile', 'future_range_dominance', 'triple_barrier'.
     # Choose ONE strategy to be active for the next labeling run
-    'label_type': 'ema_return_percentile', # Example: using the new strategy
+    'label_type': 'net_forward_return_quantile', # Example: using the new strategy
 
     # --- Common Parameters ---
     # int: Minimum bars a non-neutral label must persist (used for smoothing). Set to 1 to disable.
     'min_holding_period': 1, # Keep default or adjust slightly (e.g., 3-7) for 5m noise filtering
 
-    # --- Parameters for 'directional_ternary' ---
-    # int: How many bars ahead to look for price change.
-    'forward_window_bars': 20, # 5 hours lookahead for 5m data
-    # float: % price change threshold for Buy (1) / Sell (-1). Adjust based on ADAUSDT 5m swings.
-    'price_threshold_pct': 1.5, # Adjusted slightly lower as a starting point
+    # --- Parameters for 'net_forward_return_quantile' ---
+    'f_window': 300, # int: Forward lookahead window for future close
+    'fee': 0.0005, # float: Transaction fee (e.g., 0.0005 for 0.05%)
+    'slippage': 0.0001, # float: Estimated slippage (e.g., 0.0001 for 0.01%)
+    'buy_quantile_pct': 50.0, # float (0-100): Percentile for positive return threshold
+    'sell_quantile_pct': 50.0, # float (0-100): Percentile for negative return threshold
 
+    # --- Parameters for 'future_range_dominance' ---
+    'f_window_range': 40, # int: Forward lookahead window for max/min range
+    'fee_range': 0.0005, # float: Transaction fee for range calculation
+    'slippage_range': 0.0001, # float: Estimated slippage for range calculation
+    'dominance_quantile_pct': 95.0, # float (0-100): Percentile for the dominance ratio threshold
+    
     # --- Parameters for 'triple_barrier' ---
     # int: Max bars to hold before assigning neutral label if no barrier hit (time barrier).
     'max_holding_bars': 100, # Align with forward window
     # float: Fixed take profit percentage (e.g., 1.5 for 1.5%). MUST BE > 0 if use_volatility_adjustment is False.
     # Can be None or non-negative if use_volatility_adjustment is True (acts as minimum).
-    'fixed_take_profit_pct': 3, # Starting point for fixed/minimum TP
+    'fixed_take_profit_pct': 7, # Starting point for fixed/minimum TP
     # float: Fixed stop loss percentage (e.g., 0.75 for 0.75%). MUST BE > 0 if use_volatility_adjustment is False.
     # Can be None or non-negative if use_volatility_adjustment is True (acts as minimum).
-    'fixed_stop_loss_pct': 1, # Starting point for fixed/minimum SL
+    'fixed_stop_loss_pct': 3, # Starting point for fixed/minimum SL
     # bool: If True, dynamically adjust TP/SL based on ATR (using alphas below). If False, use only fixed percentages.
     'use_volatility_adjustment': True, # Recommended for crypto volatility
     # int: Lookback for ATR calculation (used if use_volatility_adjustment is True).
@@ -217,22 +224,6 @@ LABELING_CONFIG = {
     'alpha_take_profit': 9, # ATR multiplier for TP
     # float: ATR multiplier for dynamic SL barrier (used if use_volatility_adjustment is True).
     'alpha_stop_loss': 3, # ATR multiplier for SL
-
-    # --- Parameters for 'max_return_quantile' ---
-    # int: The number of bars to look ahead to find the maximum potential move.
-    'quantile_forward_window_bars': 60, # Align with other forward windows
-    # float (0-100): The percentile value used to determine the threshold for a "significant" maximum return.
-    'quantile_threshold_pct': 60.0, # Standard starting point for selectivity
-
-    # --- Parameters for 'ema_return_percentile' ---
-    # Added configuration for the new strategy
-    'f_window': 2, # int: Forward window for future close
-    'b_window': 25, # int: Backward window for EMA
-    'fee': 0.0005, # float: Trading fee (e.0.0005 for 0.05%)
-    'beta_increment': 0.1, # float: Increment factor for beta threshold per f_window
-    'lower_percentile': 85, # float (0-100): Percentile for alpha threshold
-    'upper_percentile': 99.9, # float (0-100): Percentile for beta threshold
-
 }
 
 # --- Model Training Configuration ---
@@ -380,7 +371,7 @@ STRATEGY_CONFIG = {
     # Position Management
     # int or None: Max bars to hold a position (None = no time limit).
     # This parameter is now a default, overridden by volatility_regime_max_holding_bars if enabled.
-    "max_holding_period_bars": 25,
+    "max_holding_period_bars": 150,
 
     "exit_on_neutral_signal": False,     # bool: If True, close position on neutral (0) signal. If False, ignore neutral signals while in trade.
     "allow_long_trades": True,          # bool: If True, allow opening long positions (signal 1).
@@ -388,19 +379,19 @@ STRATEGY_CONFIG = {
 
     # --- Volatility Regime Filter Parameters (NEW) ---
     # bool: Enable filtering trades and adjusting max holding period based on volatility regime?
-    "volatility_regime_filter_enabled": True,
+    "volatility_regime_filter_enabled": False,
     # dict[int, int | None]: Maps volatility regime (0=low, 1=medium, 2=high) to max holding period in bars.
     # Set to None for no time limit in that regime.
     "volatility_regime_max_holding_bars": {
-        0: 5,   # Low Volatility: Shorter holding period
-        1: 21,  # Medium Volatility: Moderate holding period
-        2: 11   # High Volatility: Longer holding period (allow trends to run)
+        0: 150,   # Low Volatility: Shorter holding period
+        1: 100,  # Medium Volatility: Moderate holding period
+        2: 50   # High Volatility: Longer holding period (allow trends to run)
     },
     # dict[int, bool]: Maps volatility regime (0=low, 1=medium, 2=high) to whether trading is allowed.
     "allow_trading_in_volatility_regime": {
         0: True, # Low Volatility: Do not trade
         1: True,  # Medium Volatility: Allow trading
-        2: False   # High Volatility: Allow trading
+        2: True   # High Volatility: Allow trading
     },
 
 
