@@ -43,8 +43,8 @@ try:
     from utils.label_generator import LabelGenerator
     from utils.label_analyzer import LabelAnalyzer # NEW: Import LabelAnalyzer
     from utils.logger_config import setup_rotating_logging
-    # from utils.exceptions import TemporalSafetyError # Not directly caught here, handled by generic Exception
-
+    # Import specific strategy for type checking
+    from utils.labeling_strategies.triple_barrier import TripleBarrierStrategy
 except ImportError as e:
     print(f"CRITICAL ERROR: Failed to import necessary modules. "
           f"Ensure your project structure and dependencies are correct. Error: {e}", file=sys.stderr)
@@ -141,6 +141,25 @@ def create_labels_pipeline(symbol: str, interval: str, label_strategy: str):
         # This full_labeled_df will only contain the 'label' column and the index.
         full_labeled_df_labels_only = gen.calculate_labels(df_input.copy())
         logger.info(f"Successfully generated labels. Labeled DataFrame (labels only) shape: {full_labeled_df_labels_only.shape}")
+        # --- Print Calculated TP/SL Percentages (if Triple Barrier) ---
+        if isinstance(gen.strategy, TripleBarrierStrategy):
+            logger.info(f"\n--- Calculated Triple Barrier Parameters for {symbol} {interval} ---")
+            logger.info(f"  Long TP (Net): {gen.strategy.long_tp_net_pct:.4f}%")
+            logger.info(f"  Long SL (Net): {gen.strategy.long_sl_net_pct:.4f}%")
+            logger.info(f"  Short TP (Net): {gen.strategy.short_tp_net_pct:.4f}%")
+            logger.info(f"  Short SL (Net): {gen.strategy.short_sl_net_pct:.4f}%")
+            logger.info(f"  Long TP (Gross Price Move): {gen.strategy.long_tp_gross_pct:.4f}%")
+            logger.info(f"  Long SL (Gross Price Move): {gen.strategy.long_sl_gross_pct:.4f}%")
+            logger.info(f"  Short TP (Gross Price Move): {gen.strategy.short_tp_gross_pct:.4f}%")
+            logger.info(f"  Short SL (Gross Price Move): {gen.strategy.short_sl_gross_pct:.4f}%")
+            logger.info(f"  Max Holding Bars: {gen.strategy.max_holding_bars}")
+            logger.info(f"  TP Quantile Percentile: {gen.strategy.tp_quantile_pct}%")
+            logger.info(f"  Risk-Reward Ratio: {gen.strategy.rr_ratio}")
+            logger.info(f"  Fee Range: {gen.strategy.fee_range}")
+            logger.info(f"  Slippage Range: {gen.strategy.slippage_range}")
+            logger.info(f"----------------------------------------------------\n")
+
+
     except ValueError as e:
         logger.critical(f"Error during label generation: {e}")
         sys.exit(1)

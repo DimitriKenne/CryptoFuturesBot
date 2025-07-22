@@ -170,6 +170,7 @@ class ResultsAnalyser:
                  raise ValueError(f"Missing equity file pattern key '{equity_file_key}' in paths configuration for backtest results.")
             # For live, equity_file_pattern can be None if the file doesn't exist
 
+
             # Format the file paths using the retrieved patterns
             # Ensure symbol and interval are safe for filenames
             safe_symbol = self.symbol.replace('/', '')
@@ -310,7 +311,35 @@ class ResultsAnalyser:
             logger.error(f"Error loading trade history from {self.trades_file_path}: {e}", exc_info=True)
             raise
 
-        # --- Attempt to load Equity Curve or Capital State ---
+        # --- Attempt to load Backtester-saved Metrics (if available) ---
+        # This block is moved up to ensure initial_capital is set from saved_metrics if possible
+        if self.saved_metrics_file_path and self.saved_metrics_file_path.exists():
+             try:
+                  logger.info(f"Loading saved metrics from {self.saved_metrics_file_path}...")
+                  with open(self.saved_metrics_file_path, 'r') as f:
+                       self.saved_metrics = json.load(f)
+
+                  # FIX: Prioritize initial_capital from saved_metrics
+                  if 'initial_capital' in self.saved_metrics:
+                       # Ensure it's a float, handling potential string representations like "1000.00"
+                       try:
+                           self.initial_capital = float(str(self.saved_metrics['initial_capital']).replace(',', ''))
+                           logger.info(f"Initial capital set from saved metrics: {self.initial_capital:.2f}")
+                       except ValueError:
+                           logger.warning(f"Could not parse 'initial_capital' from saved metrics ({self.saved_metrics['initial_capital']}).")
+                           self.initial_capital = None # Fallback to other methods if parsing fails
+                  else:
+                       logger.warning("'initial_capital' not found in saved metrics. Will attempt to derive from equity curve or capital state.")
+
+                  logger.info("Saved metrics loaded.")
+             except Exception as e:
+                  logger.warning(f"Failed to load saved metrics: {e}")
+                  self.saved_metrics = {} # Ensure it's an empty dict if loading fails
+        else:
+             logger.info("No saved metrics file found or path not configured. Will calculate metrics from data.")
+
+
+        # --- Attempt to load Equity Curve ---
         # Construct the expected parquet path for equity curve
         expected_equity_parquet_filename = f"{safe_symbol}_{safe_interval}_{self.model_type}_equity.parquet"
         equity_parquet_path = self.base_results_dir / expected_equity_parquet_filename
@@ -355,22 +384,23 @@ class ResultsAnalyser:
                      logger.warning("Equity curve index is not sorted chronologically. Sorting...")
                      self.equity_df = self.equity_df.sort_index()
 
-                # Set initial capital from the first equity value
-                if not self.equity_df.empty:
+                # Set initial capital from the first equity value ONLY IF NOT ALREADY SET FROM SAVED METRICS
+                if self.initial_capital is None and not self.equity_df.empty:
                     self.initial_capital = self.equity_df['equity'].iloc[0]
-                    logger.info(f"Equity curve loaded. Shape: {self.equity_df.shape}. Initial Capital: {self.initial_capital:.2f}")
+                    logger.info(f"Initial Capital set from equity curve: {self.initial_capital:.2f}")
+
+                if not self.equity_df.empty:
+                    logger.info(f"Equity curve loaded. Shape: {self.equity_df.shape}.")
                 else:
                     logger.warning("Equity curve file loaded but is empty.")
                     self.equity_df = None # Treat as not loaded
-                    self.initial_capital = None
+
 
             except FileNotFoundError: # Should not happen here due to exists() check, but for safety
                  self.equity_df = None
-                 self.initial_capital = None
                  logger.warning(f"Equity file not found at {equity_parquet_path}. Will attempt to calculate from trades.")
             except Exception as e:
                 self.equity_df = None
-                self.initial_capital = None
                 logger.error(f"Error loading equity curve from {equity_parquet_path}: {e}", exc_info=True)
                 logger.warning("Will attempt to calculate equity from trades.")
 
@@ -405,35 +435,36 @@ class ResultsAnalyser:
                       if not self.equity_df.index.is_monotonic_increasing:
                            self.equity_df = self.equity_df.sort_index()
 
-                      if not self.equity_df.empty:
+                      # Set initial capital from the first equity value ONLY IF NOT ALREADY SET FROM SAVED METRICS
+                      if self.initial_capital is None and not self.equity_df.empty:
                            self.initial_capital = self.equity_df['equity'].iloc[0]
-                           logger.info(f"Equity curve loaded. Shape: {self.equity_df.shape}. Initial Capital: {self.initial_capital:.2f}")
+                           logger.info(f"Initial Capital set from equity curve (fallback): {self.initial_capital:.2f}")
+
+                      if not self.equity_df.empty:
+                           logger.info(f"Equity curve loaded. Shape: {self.equity_df.shape}.")
                       else:
                            logger.warning("Equity curve file loaded but is empty.")
                            self.equity_df = None
-                           self.initial_capital = None
 
                  except Exception as e:
                       self.equity_df = None
-                      self.initial_capital = None
                       logger.error(f"Error loading equity curve from fallback path {self.equity_file_path}: {e}", exc_info=True)
                       logger.warning("Will attempt to calculate equity from trades if live results and capital state available.")
             else:
                  logger.warning("Equity file not found at primary or fallback path.")
                  self.equity_df = None
-                 self.initial_capital = None
 
 
-        # If equity file was not loaded, attempt to load initial capital and calculate equity from trades
-        if self.equity_df is None and self.results_type == 'live' and self.capital_state_file_path and self.capital_state_file_path.exists():
+        # If equity file was not loaded AND initial_capital is not set, attempt to load initial capital and calculate equity from trades
+        if self.equity_df is None and self.initial_capital is None and self.results_type == 'live' and self.capital_state_file_path and self.capital_state_file_path.exists():
              try:
-                  logger.info(f"Equity file not found. Attempting to load initial capital from {self.capital_state_file_path}...")
+                  logger.info(f"Equity file not found and initial capital not set. Attempting to load initial capital from {self.capital_state_file_path}...")
                   with open(self.capital_state_file_path, 'r') as f:
                        capital_state = json.load(f)
                   loaded_capital = capital_state.get('internal_capital') # Key used by trading_bot
                   if loaded_capital is not None and isinstance(loaded_capital, (int, float)) and loaded_capital > 0:
                        self.initial_capital = float(loaded_capital)
-                       logger.info(f"Loaded initial capital: {self.initial_capital:.2f}")
+                       logger.info(f"Loaded initial capital from capital state: {self.initial_capital:.2f}")
                        # Now calculate equity curve from trade history
                        self._calculate_equity_from_trades()
                   else:
@@ -449,24 +480,18 @@ class ResultsAnalyser:
                   logger.error(f"Error loading capital state or calculating equity from trades: {e}", exc_info=True)
                   self.initial_capital = None
 
-        elif self.equity_df is None and self.results_type == 'live' and (not self.capital_state_file_path or not self.capital_state_file_path.exists()):
-             logger.warning("Equity file not found and capital state file is missing or path not configured. Cannot calculate equity curve.")
+        elif self.equity_df is None and self.initial_capital is None and self.results_type == 'live' and (not self.capital_state_file_path or not self.capital_state_file_path.exists()):
+             logger.warning("Equity file not found, initial capital not set, and capital state file is missing or path not configured. Cannot calculate equity curve.")
              self.initial_capital = None
 
 
-        # --- Load Backtester-saved Metrics (if available) ---
-        if self.saved_metrics_file_path and self.saved_metrics_file_path.exists():
-             try:
-                  logger.info(f"Loading saved metrics from {self.saved_metrics_file_path}...")
-                  # Assumes metrics are saved as a JSON dictionary
-                  with open(self.saved_metrics_file_path, 'r') as f:
-                       self.saved_metrics = json.load(f)
-                  logger.info("Saved metrics loaded.")
-             except Exception as e:
-                  logger.warning(f"Failed to load saved metrics: {e}")
-                  self.saved_metrics = {} # Ensure it's an empty dict if loading fails
-        else:
-             logger.info("No saved metrics file found or path not configured. Will calculate metrics from data.")
+        # Final check: if initial_capital is still None, and equity_df is available, use its first value
+        if self.initial_capital is None and self.equity_df is not None and not self.equity_df.empty:
+             self.initial_capital = self.equity_df['equity'].iloc[0]
+             logger.warning(f"Initial capital was not explicitly set. Defaulting to first equity curve value: {self.initial_capital:.2f}")
+        elif self.initial_capital is None:
+             logger.error("Initial capital could not be determined from any source. Setting to 0 for metrics calculation.")
+             self.initial_capital = 0.0 # Set to a default to prevent errors in _calculate_metrics
 
 
     def _calculate_equity_from_trades(self):
@@ -539,9 +564,8 @@ class ResultsAnalyser:
                  self.metrics = {"Error": "Equity curve is empty."}
                  return
 
-            # Use the first and last values from the 'equity' column
-            # If initial_capital was loaded from file, use that, otherwise use first equity point
-            initial_capital = self.initial_capital if self.initial_capital is not None else self.equity_df['equity'].iloc[0]
+            # Use the initial_capital stored in the instance (which now prioritizes saved metrics)
+            initial_capital = self.initial_capital
             final_equity = self.equity_df['equity'].iloc[-1]
             # Use the corrected column names for PnL and fees
             total_net_pnl_from_trades = self.trade_history_df['net_pnl'].sum() if not self.trade_history_df.empty else 0.0
@@ -623,6 +647,22 @@ class ResultsAnalyser:
 
             avg_pnl_per_trade = total_net_pnl_from_trades / num_trades
 
+            # NEW: Average Win, Average Loss, and Edge (Expected Value)
+            avg_win = wins['net_pnl'].mean() if num_wins > 0 else 0.0
+            avg_loss = abs(losses['net_pnl'].mean()) if num_losses > 0 else 0.0 # Store as positive magnitude
+
+            # Calculate edge (expected value) per trade
+            # Convert win_rate from percentage to fraction for EV calculation
+            win_rate_fraction = win_rate / 100.0
+            loss_rate_fraction = 1.0 - win_rate_fraction
+
+            # Ensure avg_win and avg_loss are not NaN before calculation
+            if pd.isna(avg_win): avg_win = 0.0
+            if pd.isna(avg_loss): avg_loss = 0.0
+
+            edge_expected_value = (win_rate_fraction * avg_win) - (loss_rate_fraction * avg_loss)
+
+
             # --- Duration Metrics ---
             # Calculate duration using the loaded datetime columns
             if 'entry_time' in self.trade_history_df.columns and 'exit_time' in self.trade_history_df.columns:
@@ -680,6 +720,9 @@ class ResultsAnalyser:
                 "Number of Wins": num_wins if num_trades > 0 else 0,
                 "Number of Losses": num_losses if num_trades > 0 else 0,
                 "Win Rate (%)": f"{win_rate:.2f}",
+                "Average Win": f"{avg_win:.4f}", # NEW
+                "Average Loss": f"{avg_loss:.4f}", # NEW
+                "Edge (Expected Value)": f"{edge_expected_value:.4f}", # NEW
                 "Profit Factor": f"{profit_factor:.2f}" if np.isfinite(profit_factor) else ("Inf" if profit_factor == np.inf else "NaN"),
                 "Avg PnL per Trade": f"{avg_pnl_per_trade:.4f}",
                 "Max Drawdown (%)": f"{max_drawdown:.2f}",

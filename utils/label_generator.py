@@ -12,6 +12,7 @@ from .labeling_strategies.base_strategy import BaseLabelingStrategy, logger # Im
 from .labeling_strategies.triple_barrier import TripleBarrierStrategy
 from .labeling_strategies.net_forward_return_quantile import NetForwardReturnQuantileStrategy
 from .labeling_strategies.future_range_dominance import FutureRangeDominanceStrategy
+from .labeling_strategies.swing_pivot import SwingPivotStrategy
 
 # Define FLOAT_EPSILON here as it's used in strategies and potentially in LabelGenerator
 FLOAT_EPSILON = 1e-9
@@ -21,6 +22,7 @@ STRATEGY_MAP: Dict[str, Type[BaseLabelingStrategy]] = {
     'triple_barrier': TripleBarrierStrategy,
     'net_forward_return_quantile': NetForwardReturnQuantileStrategy,
     'future_range_dominance': FutureRangeDominanceStrategy,
+    'swing_pivot': SwingPivotStrategy
 }
 
 class LabelGenerator:

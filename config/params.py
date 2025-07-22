@@ -146,9 +146,9 @@ FEATURE_CONFIG = {
     # Technical Indicator Periods (Use lists for multiple periods where beneficial)
     'sma_periods': [10, 20, 50, 100],   # Simple Moving Averages (Standard range for context)
     'ema_periods': [10, 14, 20, 50, 100, 200], # Exponential Moving Averages (Added 200 for longer-term context)
-    'rsi_periods': [7, 14, 28, 50],        # Relative Strength Index (Shorter to medium-long for 5m)
-    'bollinger_periods': [20, 30, 40],     # Bollinger Bands (Range around common values)
-    'atr_periods': [5, 14, 20, 50],           # Average True Range (Standard and variants for volatility)
+    'rsi_periods': [7, 14, 28, 50, 150],        # Relative Strength Index (Shorter to medium-long for 5m)
+    'bollinger_periods': [20, 30, 40, 150],     # Bollinger Bands (Range around common values)
+    'atr_periods': [5, 14, 20, 50, 150],           # Average True Range (Standard and variants for volatility)
     'stochastic_periods': [14, 28],      # Stochastic Oscillator %K (Standard and double)
     'ao_periods': [5, 34],                  # Awesome Oscillator (Standard periods)
     'cci_periods': [14, 20, 40],           # Commodity Channel Index (Faster, standard, slower)
@@ -156,17 +156,26 @@ FEATURE_CONFIG = {
     'volume_periods': [10, 20, 30],        # Period for Volume-based indicators (e.g., CMF, OBV calculation window if used)
 
     # Other Feature Settings
+    'pivot_point_calculation_period': 'daily', # 'daily', 'weekly', 'monthly'
+    'pivot_point_method': 'standard', # 'standard', 'fibonacci', 'woodie', 'camarilla' (only 'standard' implemented for now)
     'support_resistance_periods': [30, 50, 100], # list[int]: Lookback for simple S/R levels (Intraday relevant ranges).
     'candlestick_patterns': [               # list[str]: Patterns to detect (uses talib).
         'hammer', 'engulfing', 'doji', 'evening_star', 'morning_star',
         'harami', 'shooting_star', 'dark_cloud_cover', 'piercing_pattern'
     ],
-    'fvg_lookback_bars': 2,                 # int: Lookback for Fair Value Gap detection (standard 3-candle is i vs i-2).
+    'fvg_lookback_bars': 3,                 # int: Lookback for Fair Value Gap detection (standard 3-candle is i vs i-2).
     'z_score_periods': [20, 30, 40],        # list[int]: Periods for Z-score calculation.
     'adr_periods': [14, 28],               # list[int]: Average 5m Range period (different lookbacks for recent volatility).
 
     # Derived Features
     'trend_strength_periods': [20, 50],     # list[int]: Short/long periods for trend strength (based on SMAs).
+    
+    # Swing Pivots & Breakout Parameters
+    'swing_pivot_left_bars': 15,
+    'swing_pivot_right_bars': 15,
+    'volume_oscillator_short_ema': 5,
+    'volume_oscillator_long_ema': 10,
+    'volume_threshold': 20, # Threshold for volume oscillator for breakout confirmation
 
     # Temporal Safety Validation (for detecting lookahead bias during feature engineering)
     'temporal_validation': {
@@ -193,37 +202,34 @@ LABELING_CONFIG = {
     'min_holding_period': 1, # Keep default or adjust slightly (e.g., 3-7) for 5m noise filtering
 
     # --- Parameters for 'net_forward_return_quantile' ---
-    'f_window': 300, # int: Forward lookahead window for future close
+    'f_window': 80, # int: Forward lookahead window for future close
     'fee': 0.0005, # float: Transaction fee (e.g., 0.0005 for 0.05%)
     'slippage': 0.0001, # float: Estimated slippage (e.g., 0.0001 for 0.01%)
     'buy_quantile_pct': 50.0, # float (0-100): Percentile for positive return threshold
     'sell_quantile_pct': 50.0, # float (0-100): Percentile for negative return threshold
 
     # --- Parameters for 'future_range_dominance' ---
-    'f_window_range': 40, # int: Forward lookahead window for max/min range
+    'f_window_range': 150, # int: Forward lookahead window for max/min range
     'fee_range': 0.0005, # float: Transaction fee for range calculation
     'slippage_range': 0.0001, # float: Estimated slippage for range calculation
-    'dominance_quantile_pct': 95.0, # float (0-100): Percentile for the dominance ratio threshold
+    'long_ratio_quantile_pct': 90.0, # float (0-100): Percentile for the long dominance ratio threshold
+    'short_ratio_quantile_pct': 90.0, # float (0-100): Percentile for the short dominance ratio threshold
     
-    # --- Parameters for 'triple_barrier' ---
-    # int: Max bars to hold before assigning neutral label if no barrier hit (time barrier).
-    'max_holding_bars': 100, # Align with forward window
-    # float: Fixed take profit percentage (e.g., 1.5 for 1.5%). MUST BE > 0 if use_volatility_adjustment is False.
-    # Can be None or non-negative if use_volatility_adjustment is True (acts as minimum).
-    'fixed_take_profit_pct': 7, # Starting point for fixed/minimum TP
-    # float: Fixed stop loss percentage (e.g., 0.75 for 0.75%). MUST BE > 0 if use_volatility_adjustment is False.
-    # Can be None or non-negative if use_volatility_adjustment is True (acts as minimum).
-    'fixed_stop_loss_pct': 3, # Starting point for fixed/minimum SL
-    # bool: If True, dynamically adjust TP/SL based on ATR (using alphas below). If False, use only fixed percentages.
-    'use_volatility_adjustment': True, # Recommended for crypto volatility
-    # int: Lookback for ATR calculation (used if use_volatility_adjustment is True).
-    #      Feature Engineering MUST generate an ATR column named 'atr_{vol_adj_lookback}'
-    #      (e.g., 'atr_14') if this strategy is used with use_volatility_adjustment=True.
-    'vol_adj_lookback': 20, # Chosen from FEATURE_CONFIG['atr_periods'] [14, 20, 50] for responsiveness
-    # float: ATR multiplier for dynamic TP barrier (used if use_volatility_adjustment is True).
-    'alpha_take_profit': 9, # ATR multiplier for TP
-    # float: ATR multiplier for dynamic SL barrier (used if use_volatility_adjustment is True).
-    'alpha_stop_loss': 3, # ATR multiplier for SL
+        # --- Parameters for 'triple_barrier' (REVISED) ---
+    # Note: These parameters are only active if 'label_type' is set to 'triple_barrier'
+    # int: Max bars to hold a position before it's considered a timeout.
+    'max_holding_bars': 150, # Example: 100 bars
+    # float (0-100): Percentile for positive future net return (at max_holding_bars) to set TP threshold.
+    # float (0-100): Percentile for positive future net return (at max_holding_bars) to set TP threshold for LONG.
+    'long_tp_quantile_pct': 75.0, # Example: TP will be the 75th percentile of positive net returns for longs
+    # float (0-100): Percentile for negative future net return (at max_holding_bars) to set TP threshold for SHORT.
+    'short_tp_quantile_pct': 50.0, # Example: TP will be the 75th percentile of negative net returns for shorts (in magnitude)
+    # float: Desired Risk-Reward ratio (e.g., 2.0 for 2:1 RR). SL will be TP / RR.
+    'rr_ratio': 1.5,
+    # float: Transaction fee rate used in TP/SL barrier price calculation (e.g., 0.0005 = 0.05%).
+    'fee_range': 0.0005,
+    # float: Estimated slippage rate used in TP/SL barrier price calculation (e.g., 0.0001 = 0.01%).
+    'slippage_range': 0.0001,
 }
 
 # --- Model Training Configuration ---
@@ -241,7 +247,7 @@ MODEL_CONFIG = {
         # Data Handling for Training
         "train_split_ratio": 0.8,           # float (0-1): Train/test split ratio.
         "cv_n_splits": 5,                   # int: Folds for Time Series Cross-Validation.
-        "class_balancing": "undersampling",            # str or None: 'undersampling', 'oversampling'. Applied before training.
+        "class_balancing": "oversampling",            # str or None: 'undersampling', 'oversampling'. Applied before training.
         "undersample_ratio": 1,           # float (0-1): Target ratio for undersampling.
 
         # --- Dimensionality Reduction (PCA) ---
@@ -361,7 +367,7 @@ STRATEGY_CONFIG = {
     # Capital and Risk
     "initial_capital": 10.0,          # float: Starting capital for simulation/live tracking.
     "risk_per_trade_pct": 1.0,          # float (0-100): Max percentage of capital to risk per trade.
-    "leverage": 5,                     # int: Exchange leverage setting.
+    "leverage": 1,                     # int: Exchange leverage setting.
     "min_liq_distance_pct": 1.0,        # float (0-100): Minimum required distance (%) between SL and estimated liquidation price.
 
     # Execution Costs
@@ -371,7 +377,7 @@ STRATEGY_CONFIG = {
     # Position Management
     # int or None: Max bars to hold a position (None = no time limit).
     # This parameter is now a default, overridden by volatility_regime_max_holding_bars if enabled.
-    "max_holding_period_bars": 150,
+    "max_holding_period_bars": 170,
 
     "exit_on_neutral_signal": False,     # bool: If True, close position on neutral (0) signal. If False, ignore neutral signals while in trade.
     "allow_long_trades": True,          # bool: If True, allow opening long positions (signal 1).
@@ -383,9 +389,9 @@ STRATEGY_CONFIG = {
     # dict[int, int | None]: Maps volatility regime (0=low, 1=medium, 2=high) to max holding period in bars.
     # Set to None for no time limit in that regime.
     "volatility_regime_max_holding_bars": {
-        0: 150,   # Low Volatility: Shorter holding period
-        1: 100,  # Medium Volatility: Moderate holding period
-        2: 50   # High Volatility: Longer holding period (allow trends to run)
+        0: 250,   # Low Volatility: Shorter holding period
+        1: 170,  # Medium Volatility: Moderate holding period
+        2: 170   # High Volatility: Longer holding period (allow trends to run)
     },
     # dict[int, bool]: Maps volatility regime (0=low, 1=medium, 2=high) to whether trading is allowed.
     "allow_trading_in_volatility_regime": {
@@ -397,23 +403,23 @@ STRATEGY_CONFIG = {
 
     # Stop-Loss and Take-Profit Strategy (for Backtester/Live Bot Execution)
     # Note: These are separate from LABELING_CONFIG parameters
-    'volatility_adjustment_enabled': True,# bool: Use ATR-based dynamic SL/TP for execution?
-    'volatility_window_bars': 20,       # int: Lookback period for ATR calculation (if enabled). Should ideally match labeling config if used there.
-    'fixed_take_profit_pct': 8.0,       # float (0-100): Fixed TP percentage for execution. MUST BE > 0.
-    'fixed_stop_loss_pct': 2.0,         # float (0-100): Fixed SL percentage for execution. MUST BE > 0.
-    'alpha_take_profit': 14.0,           # float: ATR multiplier for dynamic TP (if enabled).
-    'alpha_stop_loss': 6,             # float: ATR multiplier for dynamic SL (if enabled).
+    'volatility_adjustment_enabled': False,# bool: Use ATR-based dynamic SL/TP for execution?
+    'volatility_window_bars': 10,       # int: Lookback period for ATR calculation (if enabled). Should ideally match labeling config if used there.
+    'fixed_take_profit_pct': 5,       # float (0-100): Fixed TP percentage for execution. MUST BE > 0.
+    'fixed_stop_loss_pct': 3,         # float (0-100): Fixed SL percentage for execution. MUST BE > 0.
+    'alpha_take_profit': 20.0,           # float: ATR multiplier for dynamic TP (if enabled).
+    'alpha_stop_loss': 4,             # float: ATR multiplier for dynamic SL (if enabled).
 
     # Additional Filters
     'trend_filter_enabled': False,      # bool: Apply EMA trend filter to signals?
-    "trend_filter_ema_period": 20,     # int: Period for the trend filter EMA (if enabled).
+    "trend_filter_ema_period": 5,     # int: Period for the trend filter EMA (if enabled).
 
     # --- Confidence Filter Parameters (NEW) ---
     'confidence_filter_enabled': True,  # bool: Enable filtering trades based on model confidence?
     # float (0-100): Minimum probability/confidence required for a LONG signal to be considered valid for entry.
-    'confidence_threshold_long_pct': 60.0, # Example: require at least 60% confidence for LONG
+    'confidence_threshold_long_pct': 50.0, # Example: require at least 60% confidence for LONG
     # float (0-100): Minimum probability/confidence required for a SHORT signal to be considered valid for entry.
-    'confidence_threshold_short_pct': 60.0, # Example: require at least 60% confidence for SHORT
+    'confidence_threshold_short_pct': 50.0, # Example: require at least 60% confidence for SHORT
 
 
     # Data Handling

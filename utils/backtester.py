@@ -1249,19 +1249,19 @@ class Backtester:
             'entry_price': self._round_price(self.entry_price),
             'exit_price': self._round_price(exit_price),
             'size_qty': self._round_quantity(self.position_asset_qty),
-            'size_usd_entry': round(self.position_value_entry_usd, 2) if pd.notna(self.position_value_entry_usd) else np.nan,
+            'size_usd_entry': self.position_value_entry_usd if pd.notna(self.position_value_entry_usd) else np.nan, # Removed rounding
             'sl_price': self._round_price(self.current_trade_sl_price),
             'tp_price': self._round_price(self.current_trade_tp_price),
             'liq_price': self._round_price(self.liquidation_price),
-            'gross_pnl': round(gross_pnl, 4) if pd.notna(gross_pnl) else np.nan,
-            'entry_fee': round(entry_fee_paid, 4) if pd.notna(entry_fee_paid) else np.nan,
-            'exit_fee': round(exit_fee, 4) if pd.notna(exit_fee) else np.nan,
-            'total_fees': round(total_fees, 4) if pd.notna(total_fees) else np.nan,
-            'net_pnl': round(net_pnl, 4) if pd.notna(net_pnl) else np.nan, # Log the calculated net PnL
+            'gross_pnl': gross_pnl if pd.notna(gross_pnl) else np.nan, # Removed rounding
+            'entry_fee': entry_fee_paid if pd.notna(entry_fee_paid) else np.nan, # Removed rounding
+            'exit_fee': exit_fee if pd.notna(exit_fee) else np.nan, # Removed rounding
+            'total_fees': total_fees if pd.notna(total_fees) else np.nan, # Removed rounding
+            'net_pnl': net_pnl if pd.notna(net_pnl) else np.nan, # Removed rounding
             'exit_reason': exit_reason,
             'holding_duration_bars': holding_duration,
-            'balance_after_trade': round(self.current_balance, 2) if pd.notna(self.current_balance) else np.nan, # Record balance *after* this trade
-            'equity_after_trade': round(self.current_equity, 2) if pd.notna(self.current_equity) else np.nan,   # Record equity *after* this trade
+            'balance_after_trade': self.current_balance if pd.notna(self.current_balance) else np.nan, # Removed rounding
+            'equity_after_trade': self.current_equity if pd.notna(self.current_equity) else np.nan,   # Removed rounding
             'max_holding_at_entry': self.trade_max_holding_bars # NEW: Log the max holding period used for this trade
         }
         self.trades.append(trade_log)
