@@ -1,4 +1,4 @@
-# utils/labeling_strategies/future_range_dominance.py
+# utils/labeling_strategies/strategy3.py
 
 import pandas as pd
 import numpy as np
@@ -6,29 +6,37 @@ import logging
 from typing import Dict, Any, List, Optional
 from .base_strategy import BaseLabelingStrategy, logger, FLOAT_EPSILON
 
-class FutureRangeDominanceStrategy(BaseLabelingStrategy):
+class Strategy3(BaseLabelingStrategy):
     """
-    Labels data based on the dominance of future maximum or minimum net returns
-    within a forward window, accounting for fees and slippage.
+    Strategy 3: Future Range Dominance.
 
-    - 1: Upward movement is dominantly stronger than downward movement.
-    - -1: Downward movement is dominantly stronger than upward movement.
-    - 0: Otherwise (Neutral).
+    This strategy labels data based on the relative strength (dominance) of
+    potential future upward movement versus potential future downward movement
+    within a defined forward lookahead window. It considers net returns,
+    accounting for fees and slippage.
+
+    - A label of '1' (Buy) is assigned if the potential net profit from an upward move
+      is positive and significantly greater than the potential net profit (or loss)
+      from a downward move, and its "long dominance ratio" meets a specified quantile threshold.
+    - A label of '-1' (Sell) is assigned if the potential net profit from a downward move
+      is positive and significantly greater than the potential net profit (or loss)
+      from an upward move, and its "short dominance ratio" meets a specified quantile threshold.
+    - A label of '0' (Neutral) is assigned otherwise.
 
     Parameters:
-    - 'f_window_range': Forward lookahead window (int).
-    - 'fee_range': Transaction fee (float, e.g., 0.0005).
-    - 'slippage_range': Estimated slippage (float, e.g., 0.0001 for 0.01%).
-    - 'long_ratio_quantile_pct': Percentile for the long dominance ratio threshold (float, e.g., 90).
-    - 'short_ratio_quantile_pct': Percentile for the short dominance ratio threshold (float, e.g., 90).
+    - 'f_window_range': The forward lookahead window (in bars) to determine future max high and min low.
+    - 'fee_range': The transaction fee rate used in net return calculations.
+    - 'slippage_range': The estimated slippage rate used in net return calculations.
+    - 'long_ratio_quantile_pct': The percentile for the threshold of the long dominance ratio.
+    - 'short_ratio_quantile_pct': The percentile for the threshold of the short dominance ratio.
     """
 
     def __init__(self, config: Dict[str, Any], logger: logging.Logger):
         """
-        Initializes the FutureRangeDominanceStrategy.
+        Initializes Strategy 3 (Future Range Dominance Strategy).
         """
         super().__init__(config, logger)
-        self.logger.info("FutureRangeDominanceStrategy initializing...")
+        self.logger.info("Strategy 3 (Future Range Dominance) initializing...")
         self._validate_strategy_config()
 
         self.f_window_range = self.config['f_window_range']
@@ -36,31 +44,25 @@ class FutureRangeDominanceStrategy(BaseLabelingStrategy):
         self.slippage_range = self.config['slippage_range']
         self.long_ratio_quantile_pct = self.config['long_ratio_quantile_pct']
         self.short_ratio_quantile_pct = self.config['short_ratio_quantile_pct']
-        # Removed min_profit_threshold_pct
-        # self.min_profit_threshold_pct = self.config['min_profit_threshold_pct'] / 100.0 # Convert to fraction
 
         self.logger.info(f"  Forward Window (f_window_range): {self.f_window_range} bars")
         self.logger.info(f"  Transaction Fee (range): {self.fee_range}")
         self.logger.info(f"  Slippage (range): {self.slippage_range}")
         self.logger.info(f"  Long Ratio Quantile Percentile: {self.long_ratio_quantile_pct}")
         self.logger.info(f"  Short Ratio Quantile Percentile: {self.short_ratio_quantile_pct}")
-        # Removed min_profit_threshold_pct from log
-        # self.logger.info(f"  Minimum Profit Threshold: {self.min_profit_threshold_pct*100:.2f}%")
 
 
     def _validate_strategy_config(self):
         """
-        Validates configuration parameters specific to the Future Range Dominance strategy.
+        Validates configuration parameters specific to Strategy 3.
         """
         required_keys = [
             'f_window_range', 'fee_range', 'slippage_range',
             'long_ratio_quantile_pct', 'short_ratio_quantile_pct'
-            # Removed min_profit_threshold_pct
-            # 'min_profit_threshold_pct'
         ]
         for key in required_keys:
             if key not in self.config:
-                raise KeyError(f"Missing required configuration key for FutureRangeDominanceStrategy: '{key}'")
+                raise KeyError(f"Missing required configuration key for Strategy 3: '{key}'")
 
         if not isinstance(self.config['f_window_range'], int) or self.config['f_window_range'] <= 0:
             raise ValueError("'f_window_range' must be a positive integer.")
@@ -72,16 +74,13 @@ class FutureRangeDominanceStrategy(BaseLabelingStrategy):
             raise ValueError("'long_ratio_quantile_pct' must be a number between 0 and 100 (exclusive).")
         if not isinstance(self.config['short_ratio_quantile_pct'], (int, float)) or not (0 < self.config['short_ratio_quantile_pct'] < 100):
             raise ValueError("'short_ratio_quantile_pct' must be a number between 0 and 100 (exclusive).")
-        # Removed min_profit_threshold_pct validation
-        # if not isinstance(self.config['min_profit_threshold_pct'], (int, float)) or self.config['min_profit_threshold_pct'] < 0:
-        #     raise ValueError("'min_profit_threshold_pct' must be a non-negative number.")
 
-        self.logger.debug("FutureRangeDominanceStrategy config validated.")
+        self.logger.debug("Strategy 3 config validated.")
 
 
     def calculate_raw_labels(self, df: pd.DataFrame) -> pd.DataFrame:
         """
-        Calculates raw labels for the Future Range Dominance strategy.
+        Calculates raw labels for Strategy 3 (Future Range Dominance).
 
         Args:
             df (pd.DataFrame): DataFrame with OHLCV data, indexed by time.
@@ -90,7 +89,7 @@ class FutureRangeDominanceStrategy(BaseLabelingStrategy):
         Returns:
             pd.DataFrame: DataFrame with 'label' column (1, -1, or 0).
         """
-        self.logger.debug("Calculating raw labels for Future Range Dominance strategy.")
+        self.logger.debug("Calculating raw labels for Strategy 3 (Future Range Dominance).")
         self._validate_input_df(df, ['open', 'high', 'low', 'close'])
 
         df_copy = df.copy() # Work on a copy
@@ -143,10 +142,6 @@ class FutureRangeDominanceStrategy(BaseLabelingStrategy):
         if df_copy.empty:
             self.logger.error("DataFrame is empty after dropping NaNs. Cannot generate labels.")
             return pd.DataFrame(index=df_copy.index, data={'label': 0})
-
-        # Removed min_profit_threshold_pct filtering
-        # df_copy['Net_Return_Long_Potential_Filtered'] = df_copy['Net_Return_Long_Potential'].apply(lambda x: x if x > self.min_profit_threshold_pct else np.nan)
-        # df_copy['Net_Return_Short_Potential_Filtered'] = df_copy['Net_Return_Short_Potential'].apply(lambda x: x if x > self.min_profit_threshold_pct else np.nan)
 
         # Calculate dominance ratios based on potentials (now directly using Net_Return_X_Potential)
         # Ratio = (Dominant Potential) / (Opposing Potential Magnitude + epsilon)
@@ -217,11 +212,9 @@ class FutureRangeDominanceStrategy(BaseLabelingStrategy):
         df_copy.drop(columns=[
             'Future_Max_High', 'Future_Min_Low',
             'Net_Return_Long_Potential', 'Net_Return_Short_Potential',
-            # Removed filtered columns
-            # 'Net_Return_Long_Potential_Filtered', 'Net_Return_Short_Potential_Filtered',
             'Long_Dominance_Ratio', 'Short_Dominance_Ratio'
         ], inplace=True)
 
-        self.logger.debug("Raw labels calculated for Future Range Dominance strategy.")
+        self.logger.debug("Raw labels calculated for Strategy 3 (Future Range Dominance).")
         
         return pd.DataFrame({'label': df_copy['label']}, index=df_copy.index)

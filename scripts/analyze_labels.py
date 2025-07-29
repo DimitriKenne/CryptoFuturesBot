@@ -155,24 +155,27 @@ def analyze_labels_pipeline(symbol: str, interval: str, label_strategy: str, fut
 
         # Get f_window from LABELING_CONFIG for the specific strategy
         # This ensures the analyzer uses the same f_window as the label generator
-        if label_strategy == 'net_forward_return_quantile':
+        # Use the new strategy names for conditional logic
+        if label_strategy == 'strategy_2': # Corresponds to NetForwardReturnQuantileStrategy
             fee_param = LABELING_CONFIG.get('fee', 0.0)
             slippage_param = LABELING_CONFIG.get('slippage', 0.0)
             f_window_param = LABELING_CONFIG.get('f_window', 150)
-        elif label_strategy == 'future_range_dominance':
+        elif label_strategy == 'strategy_3': # Corresponds to FutureRangeDominanceStrategy
             fee_param = LABELING_CONFIG.get('fee_range', 0.0)
             slippage_param = LABELING_CONFIG.get('slippage_range', 0.0)
             f_window_param = LABELING_CONFIG.get('f_window_range', 40)
-        elif label_strategy == 'triple_barrier':
+        elif label_strategy == 'strategy_1': # Corresponds to TripleBarrierStrategy
             # Triple barrier doesn't have explicit 'fee'/'slippage' in its direct config
             # but relies on the overall trading_fee_rate/slippage_tolerance_pct from STRATEGY_CONFIG
             fee_param = STRATEGY_CONFIG.get('trading_fee_rate', 0.0)
             slippage_param = STRATEGY_CONFIG.get('slippage_tolerance_pct', 0.0)
             f_window_param = LABELING_CONFIG.get('max_holding_bars', 100) # Use max_holding_bars as f_window
-        elif label_strategy == 'ema_return_percentile':
-            fee_param = LABELING_CONFIG.get('fee', 0.0)
-            slippage_param = STRATEGY_CONFIG.get('slippage_tolerance_pct', 0.0)
-            f_window_param = LABELING_CONFIG.get('f_window', 100) # Assuming f_window exists in its config
+        # Add conditions for 'strategy_4' and any new strategies here
+        # elif label_strategy == 'strategy_4':
+        #     fee_param = LABELING_CONFIG.get('fee', 0.0)
+        #     slippage_param = STRATEGY_CONFIG.get('slippage_tolerance_pct', 0.0)
+        #     f_window_param = LABELING_CONFIG.get('f_window', 100)
+
 
         # Fallback if f_window_param is still 0 (not set by specific strategy logic)
         if f_window_param == 0:
@@ -253,10 +256,10 @@ if __name__ == "__main__":
     Usage example:
 
     Run all analyses for ADAUSDT 5m data with default future horizons:
-        python scripts/analyze_labels.py --symbol ADAUSDT --interval 5m --label-strategy directional_ternary
+        python scripts/analyze_labels.py --symbol ADAUSDT --interval 5m --label-strategy strategy_2
 
     Run analyses for specific horizons (10, 30, 60 bars):
-        python scripts/analyze_labels.py --symbol BTCUSDT --interval 1h --label-strategy triple_barrier --future-horizons 10 30 60
+        python scripts/analyze_labels.py --symbol BTCUSDT --interval 1h --label-strategy strategy_1 --future-horizons 10 30 60
 
     Ensure you have processed data files and a labeled data file (e.g., ADAUSDT_5m_labeled.parquet)
     in your data/ and that config/params.py and config/paths.py are correct.

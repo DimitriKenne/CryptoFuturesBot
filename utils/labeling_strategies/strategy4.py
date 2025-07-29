@@ -1,4 +1,4 @@
-# utils/labeling_strategies/swing_pivot.py
+# utils/labeling_strategies/strategy4.py
 
 import pandas as pd
 import numpy as np
@@ -6,31 +6,40 @@ import logging
 from typing import Dict, Any, List, Optional
 from .base_strategy import BaseLabelingStrategy, logger, FLOAT_EPSILON
 
-class SwingPivotStrategy(BaseLabelingStrategy):
+class Strategy4(BaseLabelingStrategy):
     """
-    Labels data based on the detection of Pine Script-style swing highs and swing lows.
+    Strategy 4: Swing Pivot.
 
-    - 1: Swing Low detected (potential buy signal)
-    - -1: Swing High detected (potential sell signal)
-    - 0: Otherwise (neutral)
+    This strategy identifies "swing high" and "swing low" points in the price data,
+    similar to how they are defined in Pine Script. These pivots are often used
+    to identify potential reversal points or key support/resistance levels.
 
-    A swing high is a high that has 'left_bars' lower highs before it and 'right_bars' lower highs after it.
-    A swing low is a low that has 'left_bars' higher lows before it and 'right_bars' higher lows after it.
+    - A label of '1' (Buy) is assigned when a Swing Low is detected and confirmed.
+    - A label of '-1' (Sell) is assigned when a Swing High is detected and confirmed.
+    - A label of '0' (Neutral) is assigned otherwise.
 
-    The label is applied at the bar where the pivot is confirmed (i.e., `right_bars` after the pivot point itself)
-    to avoid lookahead bias.
+    A swing high is defined as a high price that has 'left_bars' lower highs before it
+    and 'right_bars' lower highs after it.
+    A swing low is defined as a low price that has 'left_bars' higher lows before it
+    and 'right_bars' higher lows after it.
+
+    The label is applied at the bar where the pivot is confirmed (i.e., `right_bars`
+    after the actual pivot point) to avoid lookahead bias and ensure the pivot is
+    fully formed.
 
     Parameters:
-    - 'left_bars': Number of bars to the left to consider for pivot detection (int).
-    - 'right_bars': Number of bars to the right to consider for pivot confirmation (int).
+    - 'left_bars': The number of bars to the left of the potential pivot point to consider
+                   for determining if it's a swing high/low.
+    - 'right_bars': The number of bars to the right of the potential pivot point that must
+                    confirm the pivot for a label to be generated.
     """
 
     def __init__(self, config: Dict[str, Any], logger: logging.Logger):
         """
-        Initializes the SwingPivotStrategy.
+        Initializes Strategy 4 (Swing Pivot Strategy).
         """
         super().__init__(config, logger)
-        self.logger.info("SwingPivotStrategy initializing...")
+        self.logger.info("Strategy 4 (Swing Pivot) initializing...")
         self._validate_strategy_config()
 
         self.left_bars = self.config['left_bars']
@@ -41,23 +50,23 @@ class SwingPivotStrategy(BaseLabelingStrategy):
 
     def _validate_strategy_config(self):
         """
-        Validates configuration parameters specific to the Swing Pivot strategy.
+        Validates configuration parameters specific to Strategy 4.
         """
         required_keys = ['left_bars', 'right_bars']
         for key in required_keys:
             if key not in self.config:
-                raise KeyError(f"Missing required configuration key for SwingPivotStrategy: '{key}'")
+                raise KeyError(f"Missing required configuration key for Strategy 4: '{key}'")
 
         if not isinstance(self.config['left_bars'], int) or self.config['left_bars'] <= 0:
             raise ValueError("'left_bars' must be a positive integer.")
         if not isinstance(self.config['right_bars'], int) or self.config['right_bars'] <= 0:
             raise ValueError("'right_bars' must be a positive integer.")
 
-        self.logger.debug("SwingPivotStrategy config validated.")
+        self.logger.debug("Strategy 4 config validated.")
 
     def calculate_raw_labels(self, df: pd.DataFrame) -> pd.DataFrame:
         """
-        Calculates raw labels for the Swing Pivot strategy.
+        Calculates raw labels for Strategy 4 (Swing Pivot).
 
         Args:
             df (pd.DataFrame): DataFrame with OHLCV data, indexed by time.
@@ -66,7 +75,7 @@ class SwingPivotStrategy(BaseLabelingStrategy):
         Returns:
             pd.DataFrame: DataFrame with 'label' column (1, -1, or 0).
         """
-        self.logger.debug("Calculating raw labels for Swing Pivot strategy.")
+        self.logger.debug("Calculating raw labels for Strategy 4 (Swing Pivot).")
         self._validate_input_df(df, ['high', 'low']) # Need high and low for pivots
 
         df_copy = df.copy() # Work on a copy
@@ -130,8 +139,7 @@ class SwingPivotStrategy(BaseLabelingStrategy):
                 labels.iloc[i + self.right_bars] = 1
                 self.logger.debug(f"Swing Low detected at index {i} (value: {current_low}), label 1 assigned at {i + self.right_bars}")
 
-        self.logger.debug("Raw labels calculated for Swing Pivot strategy.")
+        self.logger.debug("Raw labels calculated for Strategy 4 (Swing Pivot).")
         
         # Return only the 'label' column with the original index
         return pd.DataFrame({'label': labels}, index=df_copy.index)
-

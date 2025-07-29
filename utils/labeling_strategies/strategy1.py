@@ -1,38 +1,45 @@
-# utils/labeling_strategies/triple_barrier.py
+# utils/labeling_strategies/strategy1.py
 
 import pandas as pd
 import numpy as np
 import logging
 from typing import Dict, Any, List, Optional, Tuple
-from .base_strategy import BaseLabelingStrategy, logger, FLOAT_EPSILON # Corrected import of FLOAT_EPSILON
+from .base_strategy import BaseLabelingStrategy, logger, FLOAT_EPSILON
 
-class TripleBarrierStrategy(BaseLabelingStrategy):
+class Strategy1(BaseLabelingStrategy):
     """
-    Labels data based on a two-step process:
-    1. Check if the future net return over 'max_holding_bars' meets a specified TP quantile.
-    2. If it does, then check if the calculated SL barrier was NOT hit within 'max_holding_bars'.
-       If SL was hit, the signal is neutral (0). Otherwise, it's an active signal (1 or -1).
-    The time barrier is implicitly handled by the 'max_holding_bars' window.
+    Strategy 1: Triple Barrier.
 
-    - 1: Long future net return meets quantile AND SL was NOT hit.
-    - -1: Short future net return meets quantile AND SL was NOT hit.
-    - 0: Future net return does not meet quantile, OR SL was hit.
+    This strategy labels data based on a combination of a profit-taking (TP) barrier,
+    a stop-loss (SL) barrier, and a time barrier. A signal (1 for long, -1 for short)
+    is generated if the price hits the TP barrier before hitting the SL barrier
+    or the maximum holding period.
+
+    The TP and SL levels are dynamically determined based on historical future net
+    returns and a specified risk-reward (RR) ratio, accounting for transaction fees and slippage.
+
+    - A label of '1' (Buy) is assigned if a potential long position hits its TP
+      before its SL within the 'max_holding_bars' window.
+    - A label of '-1' (Sell) is assigned if a potential short position hits its TP
+      before its SL within the 'max_holding_bars' window.
+    - A label of '0' (Neutral) is assigned otherwise (e.g., if SL is hit first,
+      or if neither TP nor SL is hit within the time barrier).
+
+    Parameters:
+    - 'max_holding_bars': The maximum number of bars a trade is held before being exited (time barrier).
+    - 'long_tp_quantile_pct': The percentile of positive future net returns used to set the Take Profit for long positions.
+    - 'short_tp_quantile_pct': The percentile of negative future net returns used to set the Take Profit for short positions.
+    - 'rr_ratio': The desired Risk-Reward ratio (e.g., 2.0 for 2:1 RR).
+    - 'fee_range': The transaction fee rate used in net return calculations.
+    - 'slippage_range': The estimated slippage rate used in net return calculations.
     """
 
     def __init__(self, config: Dict[str, Any], logger: logging.Logger):
         """
-        Initializes the TripleBarrierStrategy.
-
-        Config parameters:
-        - 'max_holding_bars': Maximum trade duration (int).
-        - 'long_tp_quantile_pct': Percentile for positive future net return to set TP for long (float).
-        - 'short_tp_quantile_pct': Percentile for negative future net return to set TP for short (float).
-        - 'rr_ratio': Desired Risk-Reward ratio (float).
-        - 'fee_range': Transaction fee for range calculation (float, e.g., 0.0005).
-        - 'slippage_range': Estimated slippage for range calculation (float, e.0.0001).
+        Initializes Strategy 1 (Triple Barrier Strategy).
         """
         super().__init__(config, logger)
-        self.logger.info("TripleBarrierStrategy initializing with revised logic: TP quantile + SL disqualifier.")
+        self.logger.info("Strategy 1 (Triple Barrier) initializing with revised logic: TP quantile + SL disqualifier.")
 
         self.max_holding_bars = self.config.get('max_holding_bars')
         self.long_tp_quantile_pct = self.config.get('long_tp_quantile_pct')
@@ -67,7 +74,7 @@ class TripleBarrierStrategy(BaseLabelingStrategy):
 
     def _validate_strategy_config(self):
         """
-        Validates configuration parameters specific to the Triple Barrier strategy.
+        Validates configuration parameters specific to Strategy 1.
         """
         if self.max_holding_bars is None or not isinstance(self.max_holding_bars, int) or self.max_holding_bars <= 0:
             raise ValueError("'max_holding_bars' must be a positive integer.")
@@ -87,7 +94,7 @@ class TripleBarrierStrategy(BaseLabelingStrategy):
         if self.slippage_range is None or not isinstance(self.slippage_range, (int, float)) or self.slippage_range < 0:
             raise ValueError("'slippage_range' must be a non-negative number.")
 
-        self.logger.debug("TripleBarrierStrategy config validated.")
+        self.logger.debug("Strategy 1 config validated.")
 
     def _calculate_net_return_scalar(self, entry_price: float, exit_price: float, trade_type: int) -> float:
         """
@@ -163,7 +170,7 @@ class TripleBarrierStrategy(BaseLabelingStrategy):
 
     def calculate_raw_labels(self, df: pd.DataFrame) -> pd.DataFrame:
         """
-        Calculates raw labels for the Triple Barrier strategy with data-driven TP/SL.
+        Calculates raw labels for Strategy 1 (Triple Barrier).
 
         Args:
             df (pd.DataFrame): DataFrame with OHLCV data, indexed by time.
@@ -172,7 +179,7 @@ class TripleBarrierStrategy(BaseLabelingStrategy):
         Returns:
             pd.DataFrame: DataFrame with 'label' column (1, -1, or 0).
         """
-        self.logger.debug("Calculating raw labels for Triple Barrier strategy with data-driven barriers (revised logic).")
+        self.logger.debug("Calculating raw labels for Strategy 1 (Triple Barrier) with data-driven barriers (revised logic).")
         self._validate_input_df(df, ['open', 'high', 'low', 'close'])
 
         df_copy = df.copy() # Work on a copy

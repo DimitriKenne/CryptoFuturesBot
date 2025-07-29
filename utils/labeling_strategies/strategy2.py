@@ -1,4 +1,4 @@
-# utils/labeling_strategies/net_forward_return_quantile.py
+# utils/labeling_strategies/strategy2.py
 
 import pandas as pd
 import numpy as np
@@ -6,29 +6,34 @@ import logging
 from typing import Dict, Any, List, Optional
 from .base_strategy import BaseLabelingStrategy, logger, FLOAT_EPSILON
 
-class NetForwardReturnQuantileStrategy(BaseLabelingStrategy):
+class Strategy2(BaseLabelingStrategy):
     """
-    Labels data based on future net returns (accounting for fees and slippage)
-    relative to quantile thresholds.
+    Strategy 2: Net Forward Return Quantile.
 
-    - 1: Future Net Return >= positive_threshold (Buy)
-    - -1: Future Net Return <= negative_threshold (Sell)
-    - 0: Otherwise (Neutral)
+    This strategy labels data based on future net returns (accounting for fees and slippage)
+    relative to dynamically calculated quantile thresholds.
+
+    - A label of '1' (Buy) is assigned if the future net return for a long position
+      is greater than or equal to a specified positive quantile threshold.
+    - A label of '-1' (Sell) is assigned if the future net return for a short position
+      is greater than or equal to a specified negative quantile threshold (meaning price
+      dropped sufficiently to yield a positive short return).
+    - A label of '0' (Neutral) is assigned otherwise.
 
     Parameters:
-    - 'f_window': Forward lookahead window for future close (int).
-    - 'fee': Transaction fee (float, e.g., 0.0005).
-    - 'slippage': Estimated slippage (float, e.g., 0.0001 for 0.01%).
-    - 'buy_quantile_pct': Percentile for positive return threshold (float, e.g., 90 for 90th percentile).
-    - 'sell_quantile_pct': Percentile for negative return threshold (float, e.g., 10 for 10th percentile).
+    - 'f_window': The forward lookahead window (in bars) to calculate the future close price.
+    - 'fee': The per-transaction fee rate (e.g., 0.0005 for 0.05%).
+    - 'slippage': The estimated slippage rate per transaction (e.g., 0.0001 for 0.01%).
+    - 'buy_quantile_pct': The percentile for the positive return threshold for buy signals (e.g., 90 for 90th percentile).
+    - 'sell_quantile_pct': The percentile for the negative return threshold for sell signals (e.g., 10 for 10th percentile).
     """
 
     def __init__(self, config: Dict[str, Any], logger: logging.Logger):
         """
-        Initializes the NetForwardReturnQuantileStrategy.
+        Initializes Strategy 2 (Net Forward Return Quantile Strategy).
         """
         super().__init__(config, logger)
-        self.logger.info("NetForwardReturnQuantileStrategy initializing...")
+        self.logger.info("Strategy 2 (Net Forward Return Quantile) initializing...")
         self._validate_strategy_config()
 
         self.f_window = self.config['f_window']
@@ -46,12 +51,12 @@ class NetForwardReturnQuantileStrategy(BaseLabelingStrategy):
 
     def _validate_strategy_config(self):
         """
-        Validates configuration parameters specific to the Net Forward Return Quantile strategy.
+        Validates configuration parameters specific to Strategy 2.
         """
         required_keys = ['f_window', 'fee', 'slippage', 'buy_quantile_pct', 'sell_quantile_pct']
         for key in required_keys:
             if key not in self.config:
-                raise KeyError(f"Missing required configuration key for NetForwardReturnQuantileStrategy: '{key}'")
+                raise KeyError(f"Missing required configuration key for Strategy 2: '{key}'")
 
         if not isinstance(self.config['f_window'], int) or self.config['f_window'] <= 0:
             raise ValueError("'f_window' must be a positive integer.")
@@ -64,12 +69,12 @@ class NetForwardReturnQuantileStrategy(BaseLabelingStrategy):
         if not isinstance(self.config['sell_quantile_pct'], (int, float)) or not (0 < self.config['sell_quantile_pct'] < 100):
             raise ValueError("'sell_quantile_pct' must be a number between 0 and 100 (exclusive).")
 
-        self.logger.debug("NetForwardReturnQuantileStrategy config validated.")
+        self.logger.debug("Strategy 2 config validated.")
 
 
     def calculate_raw_labels(self, df: pd.DataFrame) -> pd.DataFrame:
         """
-        Calculates raw labels for the Net Forward Return Quantile strategy.
+        Calculates raw labels for Strategy 2 (Net Forward Return Quantile).
 
         Args:
             df (pd.DataFrame): DataFrame with OHLCV data, indexed by time.
@@ -78,7 +83,7 @@ class NetForwardReturnQuantileStrategy(BaseLabelingStrategy):
         Returns:
             pd.DataFrame: DataFrame with 'label' column (1, -1, or 0).
         """
-        self.logger.debug("Calculating raw labels for Net Forward Return Quantile strategy.")
+        self.logger.debug("Calculating raw labels for Strategy 2 (Net Forward Return Quantile).")
         self._validate_input_df(df, ['close'])
 
         df_copy = df.copy() # Work on a copy
@@ -105,7 +110,7 @@ class NetForwardReturnQuantileStrategy(BaseLabelingStrategy):
         df_copy['Net_Return_Long'] = (df_copy['Future_Close'] * exit_revenue_factor - df_copy['close'] * entry_cost_factor) / safe_current_close_long
 
         # Calculate potential net return assuming a short position
-        # (Current_Close * exit_revenue_factor - Future_Close * entry_cost_factor) / (Current_Close * exit_revenue_factor)
+        # (Current_Close * exit_revenue_factor - Future_Close * entry_cost_factor) / (Current_Close * entry_revenue_factor)
         safe_current_close_short = df_copy['close'].replace(0, np.nan) * exit_revenue_factor
         df_copy['Net_Return_Short'] = (df_copy['close'] * exit_revenue_factor - df_copy['Future_Close'] * entry_cost_factor) / safe_current_close_short
 
@@ -155,6 +160,6 @@ class NetForwardReturnQuantileStrategy(BaseLabelingStrategy):
         # Drop temporary columns
         df_copy.drop(columns=['Future_Close', 'Net_Return_Long', 'Net_Return_Short'], inplace=True)
 
-        self.logger.debug("Raw labels calculated for Net Forward Return Quantile strategy.")
+        self.logger.debug("Raw labels calculated for Strategy 2 (Net Forward Return Quantile).")
         
         return pd.DataFrame({'label': df_copy['label']}, index=df_copy.index)

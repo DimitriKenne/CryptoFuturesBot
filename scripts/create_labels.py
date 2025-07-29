@@ -43,8 +43,9 @@ try:
     from utils.label_generator import LabelGenerator
     from utils.label_analyzer import LabelAnalyzer # NEW: Import LabelAnalyzer
     from utils.logger_config import setup_rotating_logging
-    # Import specific strategy for type checking
-    from utils.labeling_strategies.triple_barrier import TripleBarrierStrategy
+    # Import specific strategy for type checking (now using generic names)
+    from utils.labeling_strategies.strategy1 import Strategy1 # Import as Strategy1 for type checking
+
 except ImportError as e:
     print(f"CRITICAL ERROR: Failed to import necessary modules. "
           f"Ensure your project structure and dependencies are correct. Error: {e}", file=sys.stderr)
@@ -141,9 +142,9 @@ def create_labels_pipeline(symbol: str, interval: str, label_strategy: str):
         # This full_labeled_df will only contain the 'label' column and the index.
         full_labeled_df_labels_only = gen.calculate_labels(df_input.copy())
         logger.info(f"Successfully generated labels. Labeled DataFrame (labels only) shape: {full_labeled_df_labels_only.shape}")
-        # --- Print Calculated TP/SL Percentages (if Triple Barrier) ---
-        if isinstance(gen.strategy, TripleBarrierStrategy):
-            logger.info(f"\n--- Calculated Triple Barrier Parameters for {symbol} {interval} ---")
+        # --- Print Calculated TP/SL Percentages (if Strategy 1) ---
+        if isinstance(gen.strategy, Strategy1): # Check against Strategy1
+            logger.info(f"\n--- Calculated Strategy 1 Parameters for {symbol} {interval} ---")
             logger.info(f"  Long TP (Net): {gen.strategy.long_tp_net_pct:.4f}%")
             logger.info(f"  Long SL (Net): {gen.strategy.long_sl_net_pct:.4f}%")
             logger.info(f"  Short TP (Net): {gen.strategy.short_tp_net_pct:.4f}%")
@@ -224,24 +225,25 @@ def create_labels_pipeline(symbol: str, interval: str, label_strategy: str):
         slippage_param = 0.0
         f_window_param = 0 # Default, will be set below
 
-        if label_strategy == 'net_forward_return_quantile':
+        # Use the new strategy names for conditional logic
+        if label_strategy == 'strategy_2': # Corresponds to NetForwardReturnQuantileStrategy
             fee_param = labeling_config.get('fee', 0.0)
             slippage_param = labeling_config.get('slippage', 0.0)
-            f_window_param = labeling_config.get('f_window', 150) # Get f_window for this strategy
-        elif label_strategy == 'future_range_dominance':
+            f_window_param = labeling_config.get('f_window', 150)
+        elif label_strategy == 'strategy_3': # Corresponds to FutureRangeDominanceStrategy
             fee_param = labeling_config.get('fee_range', 0.0)
             slippage_param = labeling_config.get('slippage_range', 0.0)
-            f_window_param = labeling_config.get('f_window_range', 40) # Get f_window for this strategy
-        elif label_strategy == 'triple_barrier':
+            f_window_param = labeling_config.get('f_window_range', 40)
+        elif label_strategy == 'strategy_1': # Corresponds to TripleBarrierStrategy
             fee_param = STRATEGY_CONFIG.get('trading_fee_rate', 0.0)
             slippage_param = STRATEGY_CONFIG.get('slippage_tolerance_pct', 0.0)
-            # For triple barrier, f_window is conceptually max_holding_bars
             f_window_param = labeling_config.get('max_holding_bars', 100)
-        elif label_strategy == 'ema_return_percentile':
-            fee_param = labeling_config.get('fee', 0.0)
-            slippage_param = STRATEGY_CONFIG.get('slippage_tolerance_pct', 0.0)
-            # For EMA Return Percentile, f_window might be its 'f_window' or a similar lookahead
-            f_window_param = labeling_config.get('f_window', 100) # Assuming it has an f_window parameter
+        # Add conditions for 'strategy_4' and any new strategies here
+        # elif label_strategy == 'strategy_4':
+        #     fee_param = labeling_config.get('fee', 0.0)
+        #     slippage_param = STRATEGY_CONFIG.get('slippage', 0.0)
+        #     f_window_param = labeling_config.get('f_window', 100)
+
 
         # Fallback for any other strategy or if not found
         if f_window_param == 0: # If not set by specific strategy logic above
@@ -309,18 +311,18 @@ if __name__ == "__main__":
     """
     Usage examples:
 
-    Generate labels using the simple directional strategy:
-        python scripts/create_labels.py --symbol BTCUSDT --interval 1h --label-strategy net_forward_return_quantile
+    Generate labels using Strategy 2 (Net Forward Return Quantile):
+        python scripts/create_labels.py --symbol BTCUSDT --interval 1h --label-strategy strategy_2
 
-    Generate labels using the triple barrier strategy:
-        python scripts/create_labels.py --symbol ADAUSDT --interval 5m --label-strategy triple_barrier
+    Generate labels using Strategy 1 (Triple Barrier):
+        python scripts/create_labels.py --symbol ADAUSDT --interval 5m --label-strategy strategy_1
 
-    Generate labels using the max return quantile strategy:
-        python scripts/create_labels.py --symbol ADAUSDT --interval 15m --label-strategy future_range_dominance
+    Generate labels using Strategy 3 (Future Range Dominance):
+        python scripts/create_labels.py --symbol ADAUSDT --interval 15m --label-strategy strategy_3
 
     Ensure you have processed data files (including necessary features like ATR columns if using triple_barrier)
     in your data/processed directory, and that config/params.py and config/paths.py are correct.
     The feature generation script must produce an ATR column named 'atr_{lookback}'
     (e.g., 'atr_14') matching the 'vol_adj_lookback' parameter in LABELING_CONFIG
-    if using the 'triple_barrier' strategy with volatility adjustment.
+    if using Strategy 1 with volatility adjustment.
     """

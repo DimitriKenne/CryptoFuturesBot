@@ -530,15 +530,14 @@ class TradingBot:
         # Ensure we account for the sequence length for models that need it (like LSTM)
         model_sequence_length = max(0, self.sequence_length) # Use self.sequence_length updated from model
 
-        # The total lookback needed must be at least the maximum of feature lookback
-        # and model sequence length to ensure enough data is in the buffer
-        # for both feature calculation and sequence creation for the latest bar.
-        # Add a small buffer just in case.
-        INITIAL_DATA_BUFFER = 50 # Keep a buffer beyond the minimum requirements
-        self.total_lookback_needed = max(feature_lookback, model_sequence_length) + INITIAL_DATA_BUFFER
+        # The total lookback needed must be at least the maximum of:
+        # 1. Feature engineering requirements
+        # 2. Model sequence length requirements
+        # 3. The user-defined data_lookback_bars (which acts as an explicit buffer)
+        self.total_lookback_needed = max(feature_lookback, model_sequence_length, self.data_lookback_bars)
 
-        self.logger.info(f"FeaturesEngineer lookback: {feature_lookback}, Model sequence: {model_sequence_length}")
-        self.logger.info(f"Total lookback needed for initial data fetch: {self.total_lookback_needed} bars (includes {INITIAL_DATA_BUFFER} buffer).")
+        self.logger.info(f"FeaturesEngineer lookback: {feature_lookback}, Model sequence: {model_sequence_length}, Configured data_lookback_bars: {self.data_lookback_bars}")
+        self.logger.info(f"Total lookback needed for initial data fetch: {self.total_lookback_needed} bars.")
 
 
     def _load_previous_state(self):

@@ -7,22 +7,22 @@ from pathlib import Path
 from typing import Dict, Any, Optional, List, Type # Import Type for type hinting
 import math
 
-# --- Import Strategy Classes ---
+# --- Import Strategy Classes with new names ---
 from .labeling_strategies.base_strategy import BaseLabelingStrategy, logger # Import logger from base
-from .labeling_strategies.triple_barrier import TripleBarrierStrategy
-from .labeling_strategies.net_forward_return_quantile import NetForwardReturnQuantileStrategy
-from .labeling_strategies.future_range_dominance import FutureRangeDominanceStrategy
-from .labeling_strategies.swing_pivot import SwingPivotStrategy
+from .labeling_strategies.strategy1 import Strategy1 # Formerly triple_barrier.py
+from .labeling_strategies.strategy2 import Strategy2 # Formerly net_forward_return_quantile.py
+from .labeling_strategies.strategy3 import Strategy3 # Formerly future_range_dominance.py
+from .labeling_strategies.strategy4 import Strategy4 # Formerly swing_pivot.py
 
 # Define FLOAT_EPSILON here as it's used in strategies and potentially in LabelGenerator
 FLOAT_EPSILON = 1e-9
 
 # Map label_type strings to strategy classes
 STRATEGY_MAP: Dict[str, Type[BaseLabelingStrategy]] = {
-    'triple_barrier': TripleBarrierStrategy,
-    'net_forward_return_quantile': NetForwardReturnQuantileStrategy,
-    'future_range_dominance': FutureRangeDominanceStrategy,
-    'swing_pivot': SwingPivotStrategy
+    'strategy_1': Strategy1,
+    'strategy_2': Strategy2,
+    'strategy_3': Strategy3,
+    'strategy_4': Strategy4
 }
 
 class LabelGenerator:
@@ -197,7 +197,6 @@ class LabelGenerator:
             
             # The outer loop's increment for 'i' is handled by the 'i = actual_propagation_end_iloc' or 'i += 1'
             # statement inside the loop. No need for an extra 'i += 1' at the end of the while loop.
-            # Removing the `i += 1` at the end of the while loop to prevent double incrementing.
             # This is critical for correctness.
             pass # Removed the extra i += 1
 

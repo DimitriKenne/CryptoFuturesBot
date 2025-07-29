@@ -219,11 +219,11 @@ class LabelAnalyzer:
 
     def analyze_label_streaks(self, df_labeled: pd.DataFrame, symbol: str, interval: str, output_dir: Path):
         """
-        Analyzes the duration of consecutive non-zero label streaks,
-        where 0 means 'hold' the previous active position,
-        and the streak is capped by the f_window of the initial signal.
+        Analyzes the duration of consecutive non-zero label streaks (1 or -1).
+        A streak starts when a non-zero label appears and continues as long as the same non-zero label
+        persists. It resets when the label changes or becomes 0.
         """
-        self.logger.info(f"Starting Label Streak Analysis for {symbol.upper()} {interval} (0 means hold, capped by f_window)...")
+        self.logger.info(f"Starting Normal Label Streak Analysis for {symbol.upper()} {interval} (successive 1s and -1s)...")
 
         if df_labeled.empty or 'label' not in df_labeled.columns:
             self.logger.warning("Labeled DataFrame is empty or missing 'label' column. Skipping streak analysis.")
@@ -234,50 +234,45 @@ class LabelAnalyzer:
         df_labeled['label'] = pd.to_numeric(df_labeled['label'], errors='coerce').fillna(0).astype(int)
 
         streak_data = []
-        current_active_label = 0 # 0: no active position, 1: long, -1: short
-        current_start_index_iloc = None # Use iloc for easier arithmetic
+        current_streak_label = 0
+        current_streak_length = 0
 
         n = len(df_labeled)
         for i in range(n):
             label = df_labeled['label'].iloc[i]
 
-            if current_active_label == 0: # No active position
-                if label != 0: # New active signal
-                    current_active_label = label
-                    current_start_index_iloc = i
-            else: # An active position (1 or -1) is held
-                # Check if label flips to opposite signal OR f_window is reached
-                if label == -current_active_label or (i - current_start_index_iloc >= self.f_window):
-                    streak_length = i - current_start_index_iloc
-                    if streak_length > 0: # Ensure at least 1 bar duration
-                        streak_data.append({'label': current_active_label, 'duration': streak_length})
-
-                    # Reset for new streak or no position
-                    if label == -current_active_label: # Flipped, so start new streak with this label
-                        current_active_label = label
-                        current_start_index_iloc = i
-                    else: # f_window reached, and current label is 0 or same, so end position
-                        current_active_label = 0
-                        current_start_index_iloc = None
-                # If label is 0 or same as current_active_label, and f_window not reached, continue holding, streak continues
-                # No action needed, current_active_label and current_start_index_iloc remain
+            if label != 0 and label == current_streak_label:
+                # Continue current streak
+                current_streak_length += 1
+            elif label != 0 and label != current_streak_label:
+                # New streak starts, save previous if any
+                if current_streak_length > 0:
+                    streak_data.append({'label': current_streak_label, 'duration': current_streak_length})
+                # Start new streak
+                current_streak_label = label
+                current_streak_length = 1
+            else: # label is 0 (neutral) or label changes
+                # End current streak, save if any
+                if current_streak_length > 0:
+                    streak_data.append({'label': current_streak_label, 'duration': current_streak_length})
+                # Reset for neutral or new streak
+                current_streak_label = 0
+                current_streak_length = 0
 
         # Handle the last streak if it extends to the end of the DataFrame
-        if current_active_label != 0 and current_start_index_iloc is not None:
-            streak_length = n - current_start_index_iloc
-            if streak_length > 0:
-                streak_data.append({'label': current_active_label, 'duration': streak_length})
+        if current_streak_length > 0:
+            streak_data.append({'label': current_streak_label, 'duration': current_streak_length})
 
 
         if not streak_data:
-            self.logger.info("No active position streaks found for analysis.")
+            self.logger.info("No non-zero label streaks found for analysis.")
             return
 
         df_streaks = pd.DataFrame(streak_data)
         df_streaks_nonzero = df_streaks[df_streaks['label'] != 0].copy()
 
         if df_streaks_nonzero.empty:
-            self.logger.info("No non-zero active position streaks found for duration analysis after filtering.")
+            self.logger.info("No non-zero label streaks found for duration analysis after filtering.")
             return
 
         self.logger.info("Calculating streak duration summary statistics...")
@@ -309,20 +304,20 @@ class LabelAnalyzer:
             streak_summary = pd.DataFrame(columns=['Label', 'Count', 'Mean Duration', 'Median Duration', 'Std Dev Duration'])
 
 
-        self.logger.info("\nActive Position Streak Duration Summary (in bars, capped by f_window):") # Changed title
+        self.logger.info("\nNormal Label Streak Duration Summary (in bars):") # Changed title
         self.logger.info(streak_summary.to_string())
 
-        analysis_type_suffix = "active_position_streak_duration_fwindow_capped" # Changed suffix
+        analysis_type_suffix = "normal_label_streak_duration" # Changed suffix
         table_path = output_dir / self.table_pattern.format(
             symbol=symbol.upper(), interval=interval, analysis_type=analysis_type_suffix
         ).replace(':', '_')
         try:
             streak_summary.to_csv(table_path, index=False)
-            self.logger.info(f"Saved active position streak duration summary to {table_path}")
+            self.logger.info(f"Saved normal label streak duration summary to {table_path}")
         except Exception as e:
-            self.logger.error(f"Failed to save active position streak duration summary table: {e}")
+            self.logger.error(f"Failed to save normal label streak duration summary table: {e}")
 
-        self.logger.info("Generating active position streak duration distribution plots (capped by f_window)...") # Changed title
+        self.logger.info("Generating normal label streak duration distribution plots...") # Changed title
         try:
             plt.figure(figsize=(12, 6))
 
@@ -333,16 +328,16 @@ class LabelAnalyzer:
                 long_durations_filtered = long_durations[long_durations < long_durations.quantile(0.99)]
                 if not long_durations_filtered.empty:
                     sns.histplot(data=long_durations_filtered, bins=50, kde=True, color='green')
-                    plt.title(f'Label 1 (Long) Active Position Streak Durations (0=Hold, f_window capped)\n{symbol.upper()} {interval}')
+                    plt.title(f'Label 1 (Long) Normal Streak Durations\n{symbol.upper()} {interval}')
                     plt.xlabel('Duration (bars)')
                     plt.ylabel('Frequency')
                     plt.grid(axis='y', linestyle='--')
                 else:
                     self.logger.warning("No valid long durations after filtering for plotting.")
-                    plt.title(f'Label 1 (Long) Active Position Streak Durations\n(No Data)')
+                    plt.title(f'Label 1 (Long) Normal Streak Durations\n(No Data)')
             else:
-                self.logger.warning("No long active position streaks to plot.")
-                plt.title(f'Label 1 (Long) Active Position Streak Durations\n(No Data)')
+                self.logger.warning("No long streaks to plot.")
+                plt.title(f'Label 1 (Long) Normal Streak Durations\n(No Data)')
 
 
             plt.subplot(1, 2, 2)
@@ -352,39 +347,39 @@ class LabelAnalyzer:
                 short_durations_filtered = short_durations[short_durations < short_durations.quantile(0.99)]
                 if not short_durations_filtered.empty:
                     sns.histplot(data=short_durations_filtered, bins=50, kde=True, color='red')
-                    plt.title(f'Label -1 (Short) Active Position Streak Durations (0=Hold, f_window capped)\n{symbol.upper()} {interval}')
+                    plt.title(f'Label -1 (Short) Normal Streak Durations\n{symbol.upper()} {interval}')
                     plt.xlabel('Duration (bars)')
                     plt.ylabel('Frequency')
                     plt.grid(axis='y', linestyle='--')
                 else:
                     self.logger.warning("No valid short durations after filtering for plotting.")
-                    plt.title(f'Label -1 (Short) Active Position Streak Durations\n(No Data)')
+                    plt.title(f'Label -1 (Short) Normal Streak Durations\n(No Data)')
             else:
-                self.logger.warning("No short active position streaks to plot.")
-                plt.title(f'Label -1 (Short) Active Position Streak Durations\n(No Data)')
+                self.logger.warning("No short streaks to plot.")
+                plt.title(f'Label -1 (Short) Normal Streak Durations\n(No Data)')
 
 
             plt.tight_layout()
 
-            plot_type_suffix = "active_position_streak_duration_plot_fwindow_capped" # Changed suffix
+            plot_type_suffix = "normal_label_streak_duration_plot" # Changed suffix
             plot_path = output_dir / self.plot_pattern.format(
                 symbol=symbol.upper(), interval=interval, analysis_type=plot_type_suffix
             ).replace(':', '_')
             try:
                 plt.savefig(plot_path, dpi=150)
-                self.logger.info(f"Saved active position streak duration plot to {plot_path}")
+                self.logger.info(f"Saved normal label streak duration plot to {plot_path}")
             except Exception as e:
-                self.logger.error(f"Failed to save active position streak duration plot: {e}")
+                self.logger.error(f"Failed to save normal label streak duration plot: {e}")
 
         except ImportError:
             self.logger.warning("Matplotlib or Seaborn not installed. Skipping plot generation.")
         except Exception as e:
-            self.logger.error(f"Error plotting active position streak durations: {e}", exc_info=True)
+            self.logger.error(f"Error plotting normal label streak durations: {e}", exc_info=True)
         finally:
             if 'plt' in locals() and plt.get_fignums():
                  plt.close('all')
 
-        self.logger.info("Active Position Streak Analysis (f_window capped) complete.") # Changed title
+        self.logger.info("Normal Label Streak Analysis complete.")
 
 
     def analyze_mfe_mae(self, df_combined: pd.DataFrame, symbol: str, interval: str, output_dir: Path):
@@ -968,4 +963,3 @@ class LabelAnalyzer:
         self.analyze_regime_profitability(df_combined.copy(), symbol, interval, analysis_output_dir, future_horizons)
 
         self.logger.info(f"All analyses completed for {symbol} {interval} with strategy '{label_strategy}'.")
-

@@ -67,6 +67,9 @@ except Exception as e:
 # Basic logger for messages generated within this config file (e.g., missing env vars)
 logger = logging.getLogger(__name__)
 
+# --- Global Constants ---
+FLOAT_EPSILON = 1e-9 # Small value for floating point comparisons to avoid precision issues
+
 # --- Project Root ---
 # Assumes this file is located at project_root/config/params.py
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
@@ -124,7 +127,7 @@ EXCHANGE_CONFIG = {
         "api_secret": BINANCE_API_SECRET,
 
         # Connection Settings
-        "testnet": False,        # bool: True for Testnet, False for Production.
+        "testnet": True,        # bool: True for Testnet, False for Production.
         "tld": "com",            # str: Top-Level Domain ('com', 'us', etc.).
         "api_timeout_sec": 30,   # int: API request timeout in seconds.
 
@@ -208,6 +211,11 @@ LABELING_CONFIG = {
     'buy_quantile_pct': 50.0, # float (0-100): Percentile for positive return threshold
     'sell_quantile_pct': 50.0, # float (0-100): Percentile for negative return threshold
 
+    # --- Parameters for "swing_pivot"
+    'left_bars': 80, #Number of bars to the left to consider for pivot detection (int).
+    'right_bars': 80, #Number of bars to the right to consider for pivot confirmation (int)
+    
+    
     # --- Parameters for 'future_range_dominance' ---
     'f_window_range': 150, # int: Forward lookahead window for max/min range
     'fee_range': 0.0005, # float: Transaction fee for range calculation
@@ -278,14 +286,17 @@ MODEL_CONFIG = {
     "xgboost": {
         "model_type": "xgboost",            # str: Identifier.
         "params": {                         # dict: XGBoost hyperparameters.
-            "n_estimators": 100,            # int: Number of boosting rounds.
+            "n_estimators": 235,            # int: Number of boosting rounds.
             "max_depth": 3,                # int: Max tree depth.
-            "learning_rate": 0.1,          # float: Step size shrinkage.
-            "subsample": 0.8,              # float (0-1): Fraction of samples per tree.
-            "colsample_bytree": 0.8,       # float (0-1): Fraction of features per tree.
+            "learning_rate": 0.1370204442119109,          # float: Step size shrinkage.
+            "subsample": 0.8827429375390468,              # float (0-1): Fraction of samples per tree.
+            "colsample_bytree": 00.6661067756252009,       # float (0-1): Fraction of features per tree.
             "objective": "multi:softmax",   # str: Objective for multi-class classification.
             "num_class": 3,                 # int: Number of classes (-1, 0, 1).
             "eval_metric": "mlogloss",      # str: Evaluation metric.
+            'gamma': 0.007818203370596966,
+            'reg_alpha': 0.005522117123602399,
+            'reg_lambda': 0.9154614284548341,
             # "use_label_encoder": False,     # bool: Suppress XGBoost warning.
             # Add other XGBoost params (gamma, reg_alpha, reg_lambda, etc.).
         },
@@ -360,12 +371,12 @@ MODEL_CONFIG = {
 # Used by the live bot and as defaults for the backtester.
 STRATEGY_CONFIG = {
     # Core Identification
-    "symbol": "ADAUSDT",                # str: Trading symbol (e.g., 'BTCUSDT').
+    "symbol": "XRPUSDT",                # str: Trading symbol (e.g., 'BTCUSDT').
     "interval": "5m",                   # str: Candlestick interval (e.g., '1m', '5m', '1h').
     "model_type": "xgboost",      # str: Model to use ('random_forest', 'xgboost', 'lstm'). MUST match a key in MODEL_CONFIG.
 
     # Capital and Risk
-    "initial_capital": 10.0,          # float: Starting capital for simulation/live tracking.
+    "initial_capital": 1000.0,          # float: Starting capital for simulation/live tracking.
     "risk_per_trade_pct": 1.0,          # float (0-100): Max percentage of capital to risk per trade.
     "leverage": 1,                     # int: Exchange leverage setting.
     "min_liq_distance_pct": 1.0,        # float (0-100): Minimum required distance (%) between SL and estimated liquidation price.
@@ -423,7 +434,7 @@ STRATEGY_CONFIG = {
 
 
     # Data Handling
-    "data_lookback_bars": 300,          # int: Initial number of bars to fetch for the bot's buffer. Ensure this is > max(feature_lookback, sequence_length).
+    "data_lookback_bars": 600,          # int: Initial number of bars to fetch for the bot's buffer. Ensure this is > max(feature_lookback, sequence_length).
     'sequence_length_bars': 5,         # int: Sequence length for model input (MUST match FEATURE/MODEL config).
 
     # Live Bot Specifics

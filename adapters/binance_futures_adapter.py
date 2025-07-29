@@ -46,6 +46,7 @@ RATE_LIMIT_CODES = [-1003, -1015, -1120] # Common rate limit errors
 INVALID_FILTER_CODES = [-1013, -2010] # Price/quantity filter errors
 REDUCE_ONLY_REJECTED_CODE = -2022 # ReduceOnly order rejected (e.g., no position)
 INVALID_API_KEY_CODE = -2008 # Invalid API Key or IP Access
+MARGIN_TYPE_NO_CHANGE_CODE = -4046
 
 # --- Logger Setup ---
 logger = logging.getLogger(__name__)
@@ -227,24 +228,28 @@ class BinanceFuturesAdapter(ExchangeInterface):
             self.logger.error(f"Unexpected error setting leverage: {e}", exc_info=True)
             raise ExchangeConnectionError(f"Unexpected error setting leverage: {e}") from e
 
-    @async_retry_api_call()
-    async def _set_margin_mode(self):
-        """Sets the margin mode (ISOLATED or CROSSED) for the trading symbol."""
-        if not self.client:
-            raise ExchangeConnectionError("Binance client not initialized for setting margin mode.")
-        margin_mode = self.config.get('default_margin_mode', 'ISOLATED').upper()
+    @async_retry_api_call(max_retries=3, initial_delay=2)
+    async def _set_margin_mode(self, margin_mode: str = "ISOLATED"):
+        """
+        Sets the margin mode for the trading pair.
+        """
+        self.logger.info(f"Attempting to set margin mode to {margin_mode} for {self.symbol}...")
         try:
             resp = await self.client.futures_change_margin_type(symbol=self.symbol, marginType=margin_mode)
             self.logger.info(f"Margin mode set to {margin_mode} for {self.symbol}. Response: {resp}")
         except BinanceAPIException as e:
-            if e.code == -4059: # Margin type already set
-                self.logger.info(f"Margin type for {self.symbol} is already {margin_mode}.")
-            else:
-                self.logger.error(f"Failed to set margin mode for {self.symbol}: {e.code} - {e.message}", exc_info=True)
-                raise ExchangeConnectionError(f"Failed to set margin mode: {e.message}") from e
+            if e.code == MARGIN_TYPE_NO_CHANGE_CODE: # <--- ADD THIS CHECK
+                self.logger.info(f"Margin mode for {self.symbol} is already {margin_mode}. No change needed (API code {e.code}).")
+                # Treat this specific error as a success and continue
+                return
+            self.logger.error(f"Binance API Exception setting margin mode ({self.symbol}): {e.code} - {e.message}", exc_info=False)
+            raise ExchangeConnectionError(f"Failed to set margin mode: {e.message}") from e
+        except BinanceRequestException as e:
+            self.logger.error(f"Binance Request Exception setting margin mode ({self.symbol}): {e.status_code} - {e.message}", exc_info=True)
+            raise ExchangeConnectionError(f"Failed to set margin mode: {e.message}") from e
         except Exception as e:
-            self.logger.error(f"Unexpected error setting margin mode: {e}", exc_info=True)
-            raise ExchangeConnectionError(f"Unexpected error setting margin mode: {e}") from e
+            self.logger.error(f"Unexpected error setting margin mode ({self.symbol}): {e}", exc_info=True)
+            raise ExchangeConnectionError(f"Failed to set margin mode: {e}") from e
 
 
     @async_retry_api_call(max_retries=2, initial_delay=0.5) # Fewer retries for info fetch
@@ -640,12 +645,19 @@ class BinanceFuturesAdapter(ExchangeInterface):
             account_info = await self.client.futures_account() # Use await
             positions = []
             for pos_info in account_info['positions']:
+                # Only process positions with non-zero quantity for the specified symbol
                 if pos_info['symbol'] == symbol and float(pos_info['positionAmt']) != 0:
                     position_amount = float(pos_info['positionAmt'])
                     direction = 'long' if position_amount > 0 else 'short'
                     entry_price = float(pos_info['entryPrice'])
-                    unrealized_pnl = float(pos_info['unRealizedProfit'])
-                    liquidation_price = float(pos_info['liquidationPrice']) if float(pos_info['liquidationPrice']) > 0 else np.nan # Use np.nan for consistency
+                    
+                    # Safely get 'unRealizedProfit' with a default of 0.0 if not present
+                    unrealized_pnl = float(pos_info.get('unRealizedProfit', 0.0)) 
+                    
+                    # Safely get 'liquidationPrice', default to 0.0 if not present, then check > 0
+                    liquidation_price_raw = float(pos_info.get('liquidationPrice', 0.0))
+                    liquidation_price = liquidation_price_raw if liquidation_price_raw > 0 else np.nan # Use np.nan for consistency
+                    
                     leverage = int(pos_info['leverage']) if pos_info.get('leverage') else self.leverage # Fallback to configured leverage
 
                     # Binance API doesn't directly provide 'entryTime' for positions.
@@ -674,6 +686,7 @@ class BinanceFuturesAdapter(ExchangeInterface):
         except Exception as e:
             self.logger.error(f"Unexpected error getting open positions ({symbol}): {e}", exc_info=True)
             return []
+
 
     @async_retry_api_call()
     async def get_position_liquidation_price(self, symbol: str) -> Optional[float]:
