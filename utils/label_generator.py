@@ -56,9 +56,14 @@ class LabelGenerator:
         strategy_class = STRATEGY_MAP[self.label_type]
 
         try:
-            # Pass the relevant subset of the config to the strategy
-            # Each strategy will validate its own specific parameters
-            self.strategy: BaseLabelingStrategy = strategy_class(config=self.config, logger=self.logger)
+            # --- FIX: Pass only the specific strategy's configuration to its __init__ ---
+            # Get the strategy-specific parameters from the main config
+            strategy_specific_config = self.config.get(self.label_type, {})
+            # Also pass common parameters that might be needed by all strategies
+            # or for internal validation, like random_seed if it's in GENERAL_CONFIG
+            # For now, we'll just pass the specific config.
+            # If a strategy needs a global parameter (like random_seed), it should fetch it from GENERAL_CONFIG itself.
+            self.strategy: BaseLabelingStrategy = strategy_class(config=strategy_specific_config, logger=self.logger)
         except Exception as e:
             self.logger.error(f"An unexpected error occurred initializing LabelGenerator: {e}")
             raise # Re-raise the exception after logging

@@ -196,50 +196,73 @@ FEATURE_CONFIG = {
 # Rules for generating target labels for model training.
 LABELING_CONFIG = {
     # Strategy Selection
-    # str: Supported types: 'net_forward_return_quantile', 'future_range_dominance', 'triple_barrier'.
-    # Choose ONE strategy to be active for the next labeling run
-    'label_type': 'net_forward_return_quantile', # Example: using the new strategy
+    # str: Choose ONE strategy to be active for the next labeling run
+    # Supported types: 'strategy_1', 'strategy_2', 'strategy_3', 'strategy_4'
+    'label_type': 'strategy_4', # <--- SET THIS TO 'strategy_4' TO ACTIVATE THIS STRATEGY
 
-    # --- Common Parameters ---
+    # --- Common Parameters (apply to all strategies unless overridden within a strategy's config) ---
     # int: Minimum bars a non-neutral label must persist (used for smoothing). Set to 1 to disable.
-    'min_holding_period': 1, # Keep default or adjust slightly (e.g., 3-7) for 5m noise filtering
+    'min_holding_period': 1, # Keep default or adjust slightly (e.g., 3-7) for noise filtering
 
-    # --- Parameters for 'net_forward_return_quantile' ---
-    'f_window': 80, # int: Forward lookahead window for future close
-    'fee': 0.0005, # float: Transaction fee (e.g., 0.0005 for 0.05%)
-    'slippage': 0.0001, # float: Estimated slippage (e.g., 0.0001 for 0.01%)
-    'buy_quantile_pct': 50.0, # float (0-100): Percentile for positive return threshold
-    'sell_quantile_pct': 50.0, # float (0-100): Percentile for negative return threshold
+    # --- Parameters for 'strategy_1' (Triple Barrier) ---
+    'strategy_1': {
+        # int: Max bars to hold a position before it's considered a timeout.
+        'max_holding_bars': 150,
+        # float (0-100): Percentile for positive future net return (at max_holding_bars) to set TP threshold for LONG.
+        'long_tp_quantile_pct': 75.0,
+        # float (0-100): Percentile for negative future net return (at max_holding_bars) to set TP threshold for SHORT.
+        'short_tp_quantile_pct': 50.0,
+        # float: Desired Risk-Reward ratio (e.g., 2.0 for 2:1 RR). SL will be TP / RR.
+        'rr_ratio': 1.5,
+        # float: Transaction fee rate used in TP/SL barrier price calculation (e.g., 0.0005 = 0.05%).
+        'fee_range': 0.0005,
+        # float: Estimated slippage rate used in TP/SL barrier price calculation (e.g., 0.0001 = 0.01%).
+        'slippage_range': 0.0001,
+        # 'min_holding_period': 1 # Can override common min_holding_period here if needed
+    },
 
-    # --- Parameters for "swing_pivot"
-    'left_bars': 80, #Number of bars to the left to consider for pivot detection (int).
-    'right_bars': 80, #Number of bars to the right to consider for pivot confirmation (int)
-    
-    
-    # --- Parameters for 'future_range_dominance' ---
-    'f_window_range': 150, # int: Forward lookahead window for max/min range
-    'fee_range': 0.0005, # float: Transaction fee for range calculation
-    'slippage_range': 0.0001, # float: Estimated slippage for range calculation
-    'long_ratio_quantile_pct': 90.0, # float (0-100): Percentile for the long dominance ratio threshold
-    'short_ratio_quantile_pct': 90.0, # float (0-100): Percentile for the short dominance ratio threshold
-    
-        # --- Parameters for 'triple_barrier' (REVISED) ---
-    # Note: These parameters are only active if 'label_type' is set to 'triple_barrier'
-    # int: Max bars to hold a position before it's considered a timeout.
-    'max_holding_bars': 150, # Example: 100 bars
-    # float (0-100): Percentile for positive future net return (at max_holding_bars) to set TP threshold.
-    # float (0-100): Percentile for positive future net return (at max_holding_bars) to set TP threshold for LONG.
-    'long_tp_quantile_pct': 75.0, # Example: TP will be the 75th percentile of positive net returns for longs
-    # float (0-100): Percentile for negative future net return (at max_holding_bars) to set TP threshold for SHORT.
-    'short_tp_quantile_pct': 50.0, # Example: TP will be the 75th percentile of negative net returns for shorts (in magnitude)
-    # float: Desired Risk-Reward ratio (e.g., 2.0 for 2:1 RR). SL will be TP / RR.
-    'rr_ratio': 1.5,
-    # float: Transaction fee rate used in TP/SL barrier price calculation (e.g., 0.0005 = 0.05%).
-    'fee_range': 0.0005,
-    # float: Estimated slippage rate used in TP/SL barrier price calculation (e.g., 0.0001 = 0.01%).
-    'slippage_range': 0.0001,
+    # --- Parameters for 'strategy_2' (Net Forward Return Quantile) ---
+    'strategy_2': {
+        'f_window': 80, # int: Forward lookahead window for future close
+        'fee': 0.0005, # float: Transaction fee (e.g., 0.0005 for 0.05%)
+        'slippage': 0.0001, # float: Estimated slippage (e.g., 0.0001 for 0.01%)
+        'buy_quantile_pct': 50.0, # float (0-100): Percentile for positive return threshold
+        'sell_quantile_pct': 50.0, # float (0-100): Percentile for negative return threshold
+        # 'min_holding_period': 1 # Can override common min_holding_period here if needed
+    },
+
+    # --- Parameters for 'strategy_3' (Future Range Dominance) ---
+    'strategy_3': {
+        'f_window_range': 150, # int: Forward lookahead window for max/min range
+        'fee_range': 0.0005, # float: Transaction fee for range calculation
+        'slippage_range': 0.0001, # float: Estimated slippage for range calculation
+        'long_ratio_quantile_pct': 90.0, # float (0-100): Percentile for the long dominance ratio threshold
+        'short_ratio_quantile_pct': 90.0, # float (0-100): Percentile for the short dominance ratio threshold
+        # 'min_holding_period': 1 # Can override common min_holding_period here if needed
+    },
+
+    # --- Parameters for 'strategy_4' (Clustering-Based) ---
+    'strategy_4': {
+        'n_clusters': 3, # <--- REPLACE WITH YOUR OPTIMAL_K (e.g., 2, 3, 4)
+        'features_for_clustering': [ # <--- REPLACE WITH YOUR ACTUAL LIST OF ORIGINAL FEATURE NAMES
+            # Example features, replace with your determined list from exploratory analysis:
+            'log_returns', 'typical_price', 'atr_5', 'atr_14', 'atr_20', 'atr_50', 'atr_150', 'resistance_30', 'support_30', 'dist_to_support_30', 'dist_to_resistance_30', 'dist_to_support_norm_30', 'dist_to_resistance_norm_30', 'resistance_50', 'support_50', 'dist_to_support_50', 'dist_to_resistance_50', 'dist_to_support_norm_50', 'dist_to_resistance_norm_50', 'resistance_100', 'support_100', 'dist_to_support_100', 'dist_to_resistance_100', 'dist_to_support_norm_100', 'dist_to_resistance_norm_100', 'rsi_7', 'rsi_14', 'rsi_28', 'rsi_50', 'rsi_150', 'stoch_k_14', 'stoch_d_14', 'stoch_k_28', 'stoch_d_28', 'ao', 'sma_10', 'sma_20', 'sma_50', 'sma_100', 'ema_10', 'ema_14', 'ema_20', 'ema_50', 'ema_100', 'ema_200', 'macd', 'macd_signal', 'cci_14', 'cci_20', 'cci_40', 'bb_upper_20', 'bb_lower_20', 'bb_width_20', 'bb_upper_30', 'bb_lower_30', 'bb_width_30', 'bb_upper_40', 'bb_lower_40', 'bb_width_40', 'bb_upper_150', 'bb_lower_150', 'bb_width_150', 'obv', 'cmf_10', 'mfi_10', 'cmf_20', 'mfi_20', 'cmf_30', 'mfi_30', 'pattern_hammer_signal', 'pattern_engulfing_signal', 'pattern_doji_signal', 'pattern_evening_star_signal', 'pattern_morning_star_signal', 'pattern_harami_signal', 'pattern_shooting_star_signal', 'pattern_dark_cloud_cover_signal', 'pattern_piercing_pattern_signal', 'fvg', 'pp', 'r1', 's1', 'r2', 's2', 'r3', 's3', 'swing_high_pivot', 'swing_low_pivot', 'volume_osc', 'trend_strength', 'volatility_regime', 'pattern_cluster', 'dist_to_pp_norm', 'is_above_pp', 'is_below_pp', 'dist_to_r1_norm', 'is_above_r1', 'is_below_r1', 'dist_to_s1_norm', 'is_above_s1', 'is_below_s1', 'dist_to_r2_norm', 'is_above_r2', 'is_below_r2', 'dist_to_s2_norm', 'is_above_s2', 'is_below_s2', 'dist_to_r3_norm', 'is_above_r3', 'is_below_r3', 'dist_to_s3_norm', 'is_above_s3', 'is_below_s3', 'dist_to_swing_high_norm', 'dist_to_swing_low_norm', 'is_above_swing_high', 'is_below_swing_low', 'is_resistance_broken_strong_vol', 'is_support_broken_strong_vol', 'is_bull_wick_at_resistance', 'is_bear_wick_at_support'
+        ],
+        'pca_n_components': 0.95, # <--- REPLACE WITH YOUR PCA_N_COMPONENTS (e.g., 0.95 or 3)
+        'cluster_to_label_mapping': { # <--- REPLACE WITH YOUR ACTUAL MAPPING FROM CLUSTER ID TO LABEL
+            1: 1,  # Example: Cluster 1 -> Buy
+            0: 0, # Example: Cluster 0 -> Neutral
+            2: -1   # Example: Cluster 2 -> Sell
+            # Adjust these based on your `median_returns_per_cluster` from the notebook
+            # e.g., if K=2, it might be {0: 1, 1: -1}
+        },
+        # 'min_holding_period': 1 # Can override common min_holding_period here if needed
+        # --- NEW: Fees and Slippage for Strategy 4 ---
+        'trading_fee_rate': 0.0005,   # Default: 0.05% per transaction
+        'slippage_tolerance_pct': 0.01, # Default: 0.01% estimated slippage
+        'future_return_window': 150 # bars (same as FUTURE_RETURN_WINDOW in notebook)
+    }
 }
-
 # --- Model Training Configuration ---
 # Hyperparameters and settings for different ML models.
 MODEL_CONFIG = {
