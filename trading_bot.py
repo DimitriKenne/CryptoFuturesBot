@@ -88,7 +88,7 @@ try:
     from utils.exchange_interface import ExchangeInterface
     from utils.notification_manager import NotificationManager
     from utils.model_trainer import ModelTrainer
-    from utils.features_engineer import FeaturesEngineer
+    from utils.feature_engineering.feature_engineer import FeaturesEngineer
     from utils.logger_config import setup_rotating_logging
     from utils.data_manager import DataManager # Import DataManager for Parquet handling
     # Custom exceptions
