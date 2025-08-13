@@ -54,7 +54,7 @@ try:
     from config.params import MODEL_CONFIG, STRATEGY_CONFIG, BACKTESTER_CONFIG, GENERAL_CONFIG, FEATURE_CONFIG
     from config.paths import PATHS
     from utils.data_manager import DataManager
-    from utils.model_trainer import ModelTrainer
+    from utils.training.model_trainer import ModelTrainer
     from utils.feature_engineering.feature_engineer import FeaturesEngineer
     from utils.backtester import Backtester
     from utils.logger_config import setup_rotating_logging

@@ -3,34 +3,41 @@
 train_model.py
 
 Loads processed data with features and labels (-1, 0, 1); trains a model using
-the configuration from config.params.MODEL_CONFIG; evaluates the model;
+the configuration from config.params.app_config.model; evaluates the model;
 and saves the trained model and metadata using DataManager.
 
 Supports RandomForest, XGBoost, and LSTM models for TERNARY classification.
 
-Uses the updated configuration structure from config.params.MODEL_CONFIG,
-config.params.GENERAL_CONFIG, and config.paths.PATHS.
+Uses the unified configuration structure from config.params.app_config.
 Configures logging using utils/logger_config.py.
 Includes optional hyperparameter tuning using RandomizedSearchCV and TimeSeriesSplit.
-Handles train, validation, and test data splitting.
+Handles train and test data splitting.
 Removes rows with NaN values in features or labels before splitting.
 
-MODIFIED: Added functionality to specify a subset of features to use for training
-          via a command-line argument.
+MODIFIED: Configuration is now accessed via the central 'app_config' object.
+MODIFIED: Data splitting now strictly follows 'train_test_split_ratio' from ModelConfig,
+          with LSTM handling its own validation split internally via 'validation_split'.
+MODIFIED: Removed redundant command-line arguments for train_ratio and val_ratio,
+          as these are now managed by configuration.
 MODIFIED: Updated DataManager calls for loading data and saving model artifacts.
 MODIFIED: Adjusted labeled data loading to no longer require a strategy-specific suffix.
 MODIFIED: Added command-line arguments and logic for PCA dimensionality reduction.
-MODIFIED: Added imports for ColumnTransformer and Union.
+MODIFIED: Added explicit imports for RandomForestParams and XGBoostParams to resolve UndefinedVariable errors.
+MODIFIED: ModelTrainer and related training utilities are now located in utils/training/.
+MODIFIED: Ensured DataManager is correctly imported and accessible.
+MODIFIED: Corrected access to TF_AVAILABLE and tf by making them attributes of ModelConfig.
+MODIFIED: Ensured the model_type from CLI is correctly passed to the ModelConfig used for training.
+MODIFIED: Adjusted XGBoost training to handle early stopping when no explicit validation set is provided.
 """
 
 import sys
 import logging
 import argparse
 from pathlib import Path
-from typing import Tuple, List, Dict, Any, Optional, Union # Added Union
-from collections import Counter # Import Counter for imblearn setup in tuning
-import time # Import time for measuring training duration
-import copy # Import copy for deepcopying config
+from typing import Tuple, List, Dict, Any, Optional, Union
+from collections import Counter
+import time
+import copy
 
 import pandas as pd
 import numpy as np
@@ -43,16 +50,24 @@ load_dotenv(find_dotenv())
 
 # Import scikit-learn and imblearn components for tuning
 from sklearn.ensemble import RandomForestClassifier
-from sklearn.model_selection import RandomizedSearchCV, TimeSeriesSplit
+from sklearn.model_selection import RandomizedSearchCV, TimeSeriesSplit, train_test_split # Import train_test_split
 from imblearn.pipeline import Pipeline
 from imblearn.over_sampling import SMOTE
 from imblearn.under_sampling import RandomUnderSampler
-from sklearn.preprocessing import StandardScaler # For preprocessor in tuning
-from sklearn.decomposition import PCA # For PCA in tuning
-from sklearn.compose import ColumnTransformer # Added ColumnTransformer
+from sklearn.preprocessing import StandardScaler, MinMaxScaler
+from sklearn.decomposition import PCA
+from sklearn.compose import ColumnTransformer
 
 # Import parameter distributions for RandomizedSearchCV
-from scipy.stats import uniform, randint
+try:
+    from scipy.stats import uniform, randint
+    SCIPY_AVAILABLE = True
+except ImportError:
+    uniform = None
+    randint = None
+    SCIPY_AVAILABLE = False
+    logging.warning("Scipy not found. Hyperparameter tuning distributions (uniform, randint) will not be available.")
+
 from xgboost import XGBClassifier
 
 
@@ -63,16 +78,14 @@ sys.path.insert(0, str(PROJECT_ROOT))
 # Import configuration and utilities
 try:
     from config.paths import PATHS
-    from config.params import MODEL_CONFIG, GENERAL_CONFIG # Import GENERAL_CONFIG
-    from utils.data_manager import DataManager # Import DataManager
-    from utils.model_trainer import ModelTrainer # Import ModelTrainer
-    # from utils.label_generator import LabelGenerator # No longer needed for choices here
-    # Import setup_rotating_logging
+    from config.params import app_config
+    from config.model_config_schema import ModelConfig, RandomForestParams, XGBoostParams, LSTMParams
+    from utils.data_manager import DataManager
+    from utils.training.model_trainer import ModelTrainer
     from utils.logger_config import setup_rotating_logging
 except ImportError as e:
-    # Use print for initial errors before logging is fully configured
     print(f"ERROR: Failed to import necessary modules. Ensure config/, utils/ are correctly structured and required files exist. Error: {e}", file=sys.stderr)
-    sys.exit(1) # Exit if essential imports fail
+    sys.exit(1)
 except FileNotFoundError as e:
     print(f"ERROR: Configuration file not found: {e}. Ensure config/params.py and config/paths.py exist.", file=sys.stderr)
     sys.exit(1)
@@ -84,35 +97,19 @@ except Exception as e:
     sys.exit(1)
 
 
-# --- Conditional Import for TensorFlow/Keras ---
-# This allows the script to run even if TensorFlow is not installed,
-# but LSTM functionality will be disabled.
-try:
-    import tensorflow as tf
-    tf_version = getattr(tf, '__version__', 'unknown')
-    LSTM_AVAILABLE = True
-except ImportError:
-    tf = None
-    LSTM_AVAILABLE = False
-except Exception as e:
-    # Catch other potential errors during TF import (e.g., DLL issues)
-    tf = None
-    LSTM_AVAILABLE = False
-
+# --- Conditional Import for TensorFlow/Keras Status ---
+# Now access TF_AVAILABLE and tf directly from app_config.model
+TF_AVAILABLE = app_config.model.TF_AVAILABLE
+tf = app_config.model.tf
 
 # --- Configure Rotating Logging ---
-# Set up rotating logging for this script
-# Call setup_rotating_logging with filename base and level
 try:
     setup_rotating_logging('train_model', logging.INFO)
-    # Get logger for this script (after setup_rotating_logging has been called)
-    # This ensures the logger uses the configured handlers
     logger = logging.getLogger(__name__)
     logger.info("Logging configured successfully in train_model.py using setup_rotating_logging.")
 
-    # --- Log TensorFlow availability here, after logger is configured ---
-    if LSTM_AVAILABLE:
-        logger.info(f"TensorFlow (version {tf_version}) imported successfully.")
+    if TF_AVAILABLE:
+        logger.info(f"TensorFlow (version {getattr(tf, '__version__', 'unknown')}) imported successfully.")
         if tf.config.list_physical_devices('GPU'):
             logger.info("GPU is available and enabled for TensorFlow.")
         else:
@@ -122,7 +119,6 @@ try:
 
 
 except ImportError:
-    # Fallback basic logging if setup_rotating_logging is not available
     logging.basicConfig(
         level=logging.INFO,
         format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
@@ -131,7 +127,6 @@ except ImportError:
     logger = logging.getLogger(__name__)
     logger.warning("utils.logger_config not found or setup_rotating_logging failed. Using basic logging configuration.")
 except Exception as e:
-    # Fallback basic logging if setup_rotating_logging fails
     logging.basicConfig(
         level=logging.INFO,
         format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
@@ -141,17 +136,17 @@ except Exception as e:
     logger.error(f"Failed to configure logging using utils.logger_config: {e}. Using basic logging.", exc_info=True)
 
 
-def run_tuning(model_key: str, X_train: pd.DataFrame, y_train: pd.Series, model_config: Dict[str, Any]) -> Dict[str, Any]:
+def run_tuning(model_key: str, X_full_cleaned: pd.DataFrame, y_full_cleaned: pd.Series, current_model_config: ModelConfig) -> Dict[str, Any]:
     """
     Performs hyperparameter tuning for the specified model using RandomizedSearchCV
     with TimeSeriesSplit.
 
     Args:
         model_key (str): The key for the model type ('random_forest', 'xgboost').
-        X_train (pd.DataFrame): Training features (already cleaned of NaNs).
-        y_train (pd.Series): Training labels (-1, 0, 1) (already cleaned of NaNs).
-        model_config (Dict[str, Any]): The specific model configuration dictionary
-                                       from MODEL_CONFIG.
+        X_full_cleaned (pd.DataFrame): Full cleaned features data (for tuning CV).
+        y_full_cleaned (pd.Series): Full cleaned labels data (for tuning CV).
+        current_model_config (ModelConfig): The ModelConfig instance for the current model type,
+                                            potentially updated with CLI args (e.g., PCA).
 
     Returns:
         Dict[str, Any]: The best parameters found by tuning, merged with base parameters.
@@ -166,47 +161,45 @@ def run_tuning(model_key: str, X_train: pd.DataFrame, y_train: pd.Series, model_
     if model_key == 'lstm':
         logger.warning("Hyperparameter tuning for LSTM models is not implemented in this script.")
         logger.warning("Using default parameters from config for LSTM.")
-        # Return the original model parameters for LSTM
-        return model_config.get('params', {})
+        return current_model_config.lstm_params.__dict__
 
+    if model_key == 'random_forest':
+        base_model_params = current_model_config.random_forest_params.__dict__.copy()
+        param_dist_dataclass = current_model_config.random_forest_tuning_params
+    elif model_key == 'xgboost':
+        base_model_params = current_model_config.xgboost_params.__dict__.copy()
+        param_dist_dataclass = current_model_config.xgboost_tuning_params
+    else:
+        raise ValueError(f"Model type '{model_key}' is not supported for tuning.")
 
-    # Get base model parameters and tuning distributions from the model_config
-    base_model_params = model_config.get('params', {}).copy()
-    param_dist = model_config.get('tuning_param_dist', {})
+    param_dist = {k: v for k, v in param_dist_dataclass.__dict__.items() if v is not None}
 
-    # Ensure param_dist is not empty before proceeding with tuning
     if not param_dist:
          logger.warning(f"No tuning parameter distributions found for {model_key} in config. Skipping tuning and using default parameters.")
-         # Return default parameters if no tuning distributions are defined
          return base_model_params
 
 
     logger.info(f"Tuning parameter distributions: {param_dist}")
 
-    # Create the model instance directly for the tuning pipeline
     try:
         if model_key == 'random_forest':
-             # Remove class_balancing and undersample_ratio from params before passing to RF
-             rf_params_for_tuning = {k: v for k, v in base_model_params.items() if k not in ['class_balancing', 'undersample_ratio']}
-             # Add class_weight parameter if specified in config
-             class_weight_param = base_model_params.get('class_weight')
-             if class_weight_param is not None:
-                  rf_params_for_tuning['class_weight'] = class_weight_param
-
-             model = RandomForestClassifier(random_state=GENERAL_CONFIG.get('random_seed', 42), n_jobs=GENERAL_CONFIG.get('parallel_jobs', -1), **rf_params_for_tuning)
+             rf_params_for_tuning = {k: v for k, v in base_model_params.items() if k not in ['class_balancing']}
+             model = RandomForestClassifier(
+                 random_state=app_config.general.random_seed,
+                 n_jobs=app_config.general.n_processors,
+                 **rf_params_for_tuning
+             )
         elif model_key == 'xgboost':
-             # Remove class_balancing and undersample_ratio from params before passing to XGBoost
-             xgb_params_for_tuning = {k: v for k, v in base_model_params.items() if k not in ['class_balancing', 'undersample_ratio']}
-             # XGBoost specific setup for ternary classification
-             xgb_params_for_tuning.update({
+             xgb_params_for_tuning = {k: v for k, v in base_model_params.items() if k not in ['class_balancing', 'early_stopping_rounds']} # Exclude early_stopping_rounds from base for tuning
+             final_xgb_params_for_tuning = {
                  'objective': 'multi:softmax',
                  'num_class': 3,
                  'eval_metric': 'mlogloss',
-                 # Removed 'use_label_encoder': False as it's deprecated/unused in recent XGBoost
-                 'random_state': GENERAL_CONFIG.get('random_seed', 42),
-                 'n_jobs': GENERAL_CONFIG.get('parallel_jobs', -1),
-             })
-             model = XGBClassifier(**xgb_params_for_tuning)
+                 'random_state': app_config.general.random_seed,
+                 'n_jobs': app_config.general.n_processors,
+                 **xgb_params_for_tuning
+             }
+             model = XGBClassifier(**final_xgb_params_for_tuning)
         else:
              raise ValueError(f"Model type '{model_key}' is not supported for tuning.")
 
@@ -216,87 +209,93 @@ def run_tuning(model_key: str, X_train: pd.DataFrame, y_train: pd.Series, model_
         raise RuntimeError("Failed to create base model for tuning.")
 
 
-    # Create the preprocessing step using a dummy ModelTrainer instance
-    # Pass the specific model configuration to the dummy trainer
-    # Pass the feature_subset to the dummy trainer's preprocessor creation
-    feature_subset_for_tuning = model_config.get('features_to_use') # Get the feature subset from config
+    scaler_type = current_model_config.scaler_type
+    scaler_step = ('scaler', StandardScaler())
 
-    # --- Prepare for PCA in tuning pipeline if enabled ---
-    pca_enabled_tuning = model_config.get('dimensionality_reduction', {}).get('enabled', False)
-    pca_method_tuning = model_config.get('dimensionality_reduction', {}).get('method', 'pca')
-    pca_params_tuning = model_config.get('dimensionality_reduction', {}).get('params', {})
+    if scaler_type == 'minmax':
+        scaler_step = ('scaler', MinMaxScaler())
+    elif scaler_type is None:
+        scaler_step = None
+    else:
+        pass
 
-    # Create a pipeline for numeric features: StandardScaler -> (Optional) PCA
-    numeric_transformer_steps = [('scaler', StandardScaler())]
-    if pca_enabled_tuning and pca_method_tuning == 'pca':
-        logger.info(f"Adding PCA to tuning preprocessor with params: {pca_params_tuning}")
-        numeric_transformer_steps.append(('pca', PCA(**pca_params_tuning)))
+    numeric_transformer_steps = [scaler_step] if scaler_step is not None else []
 
-    numeric_transformer_for_tuning = Pipeline(steps=numeric_transformer_steps)
+    pca_enabled_tuning = current_model_config.pca_enabled
+    pca_n_components_tuning = current_model_config.pca_n_components
 
-    # Create the ColumnTransformer for tuning
+    if pca_enabled_tuning:
+        pca_params = {'n_components': pca_n_components_tuning}
+        logger.info(f"Adding PCA to tuning preprocessor with params: {pca_params}")
+        numeric_transformer_steps.append(('pca', PCA(**pca_params)))
+
+    all_numeric_cols = X_full_cleaned.select_dtypes(include=np.number).columns.tolist()
+    numeric_features_for_preprocessor = all_numeric_cols
+    if current_model_config.features_to_use:
+        numeric_features_for_preprocessor = [f for f in all_numeric_cols if f in current_model_config.features_to_use]
+
+
+    transformers = []
+    if numeric_features_for_preprocessor:
+        numeric_transformer_pipeline = Pipeline(steps=numeric_transformer_steps)
+        transformers.append(('num', numeric_transformer_pipeline, numeric_features_for_preprocessor))
+    else:
+        logger.warning("No numeric features found to apply preprocessor for tuning. Preprocessor will be mostly passthrough.")
+
+
     preprocessor = ColumnTransformer(
-        transformers=[
-            ('num', numeric_transformer_for_tuning, X_train.select_dtypes(include=np.number).columns.tolist())
-        ],
+        transformers=transformers,
         remainder='passthrough'
     )
 
 
-    # Create the imblearn pipeline steps for tuning
     steps = [('preprocessor', preprocessor)]
 
-    # Add sampler step if defined in model_config for tuning
-    balanced_strategy_tuning = model_config.get('params', {}).get('class_balancing') # Use 'class_balancing' key from params
+    balanced_strategy_tuning = base_model_params.get('class_balancing')
     if balanced_strategy_tuning == 'undersampling':
-         # Use RandomUnderSampler with default strategy (balances to minority class size)
-         sampler = RandomUnderSampler(random_state=GENERAL_CONFIG.get('random_seed', 42))
+         sampler = RandomUnderSampler(random_state=app_config.general.random_seed)
          steps.append(('sampler', sampler))
          logger.info("Added RandomUnderSampler to tuning pipeline.")
-
     elif balanced_strategy_tuning == 'oversampling':
-         # Use SMOTE with default strategy (oversamples minority class(es) to equal majority class size)
-         sampler = SMOTE(random_state=GENERAL_CONFIG.get('random_seed', 42))
+         sampler = SMOTE(random_state=app_config.general.random_seed)
          steps.append(('sampler', sampler))
          logger.info("Added SMOTE to tuning pipeline.")
-
+    elif isinstance(balanced_strategy_tuning, dict):
+        sampler = SMOTE(random_state=app_config.general.random_seed, **balanced_strategy_tuning)
+        steps.append(('sampler', sampler))
+        logger.info(f"Added SMOTE to tuning pipeline with custom params: {balanced_strategy_tuning}")
     elif balanced_strategy_tuning is not None:
-         logger.warning(f"Unsupported 'class_balancing' strategy '{balanced_strategy_tuning}' for tuning. Skipping sampler in tuning pipeline.")
+         logger.warning(f"Unsupported 'class_balancing' strategy '{balanced_strategy_tuning}'. Skipping sampler in tuning pipeline.")
 
 
-    # Add the model step to the pipeline
     steps.append(('model', model))
 
-    # Create the full scikit-learn/imblearn pipeline for tuning
     pipeline = Pipeline(steps)
     logger.debug(f"Tuning pipeline created with steps: {[name for name, _ in pipeline.steps]}")
 
 
-    # Define the cross-validation strategy (TimeSeriesSplit)
-    # Get n_splits from model-specific config or general config, default to 5
-    n_splits = model_config.get('cv_n_splits', GENERAL_CONFIG.get('tscv_splits', 5))
+    n_splits = app_config.general.hyperparameter_tuning_cv_folds
     if not isinstance(n_splits, int) or n_splits <= 0:
-         logger.warning(f"Invalid cv_n_splits ({n_splits}). Defaulting to 5.")
+         logger.warning(f"Invalid hyperparameter_tuning_cv_folds ({n_splits}) in general config. Defaulting to 5.")
          n_splits = 5
     tscv = TimeSeriesSplit(n_splits=n_splits)
     logger.info(f"Using TimeSeriesSplit with {n_splits} splits for tuning.")
 
 
-    # Define the scoring metric for tuning
-    # Get scoring_metric from model-specific config or general config, default to 'f1_macro'
-    scoring_metric = model_config.get('tuning_scoring_metric', GENERAL_CONFIG.get('tuning_scoring_metric', 'f1_macro'))
+    scoring_metric = current_model_config.tuning_scoring_metric
+    if not scoring_metric:
+        scoring_metric = 'f1_macro'
+        logger.warning(f"No tuning scoring metric found in model config. Defaulting to '{scoring_metric}'.")
+
     logger.info(f"Using '{scoring_metric}' as the scoring metric for tuning.")
 
 
-    # Perform RandomizedSearchCV
-    # Get n_iter from model-specific config or general config, default to 10
-    n_iter = model_config.get('random_search_n_iter', GENERAL_CONFIG.get('random_search_n_iter', 10))
+    n_iter = app_config.general.hyperparameter_tuning_n_iter
     if not isinstance(n_iter, int) or n_iter <= 0:
-         logger.warning(f"Invalid random_search_n_iter ({n_iter}). Defaulting to 10.")
+         logger.warning(f"Invalid hyperparameter_tuning_n_iter ({n_iter}) in general config. Defaulting to 10.")
          n_iter = 10
 
-    # Get n_jobs for CV from general config, default to -1
-    cv_jobs = GENERAL_CONFIG.get('cv_jobs', -1)
+    cv_jobs = app_config.general.n_processors
 
 
     logger.info(f"Running RandomizedSearchCV with {n_iter} iterations and {n_splits}-fold TimeSeriesSplit...")
@@ -307,29 +306,22 @@ def run_tuning(model_key: str, X_train: pd.DataFrame, y_train: pd.Series, model_
             n_iter=n_iter,
             cv=tscv,
             scoring=scoring_metric,
-            random_state=GENERAL_CONFIG.get('random_seed', 42),
+            random_state=app_config.general.random_seed,
             n_jobs=cv_jobs,
-            verbose=1 # Set verbose level to show progress
+            verbose=1
         )
 
-        # Map y_train to integers (0, 1, 2) for models/samplers that require it
-        # y_train is already cleaned of NaNs and is int type.
-        # Corrected mapping: -1 -> 0, 0 -> 1, 1 -> 2
-        y_train_mapped = y_train.map({-1: 0, 0: 1, 1: 2})
+        y_full_cleaned_mapped = y_full_cleaned.map({-1: 0, 0: 1, 1: 2})
 
 
-        # Fit RandomizedSearchCV on the training data
-        random_search.fit(X_train, y_train_mapped)
+        random_search.fit(X_full_cleaned, y_full_cleaned_mapped)
 
         logger.info("RandomizedSearchCV complete.")
         logger.info(f"Best parameters found: {random_search.best_params_}")
         logger.info(f"Best cross-validation score ({scoring_metric}): {random_search.best_score_:.4f}")
 
-        # Extract the best model parameters from the pipeline's best_params_
-        # Keys are in the format 'stepname__parametername' (e.g., 'model__n_estimators')
         best_model_params = {k.replace('model__', ''): v for k, v in random_search.best_params_.items() if k.startswith('model__')}
 
-        # Merge best model parameters with base parameters (overwriting defaults with tuned values)
         tuned_params = {**base_model_params, **best_model_params}
         logger.info(f"Extracted best model parameters: {best_model_params}")
         logger.info(f"Merged tuned parameters: {tuned_params}")
@@ -341,47 +333,17 @@ def run_tuning(model_key: str, X_train: pd.DataFrame, y_train: pd.Series, model_
         raise RuntimeError(f"Hyperparameter tuning failed: {e}")
 
 
-# --- Data Loading and Splitting ---
 def load_and_split_data(
     symbol: str,
     interval: str,
-    # REMOVED: label_strategy: str, as it's no longer needed for loading the labeled file
-    train_ratio: float,
-    val_ratio: float = 0.1,
+    train_split_ratio: float,
     features_to_use: Optional[List[str]] = None
-) -> Tuple[pd.DataFrame, pd.DataFrame, pd.DataFrame, pd.Series, pd.Series, pd.Series, pd.DataFrame, pd.Series]:
-    """
-    Loads processed and labeled data (-1, 0, 1) using DataManager, aligns them,
-    performs time-series split into training, validation, and test sets, validates
-    feature data types, REMOVES ROWS WITH NA LABELS AND NA FEATURES.
-    Optionally selects a subset of features if features_to_use is provided.
-
-    Args:
-        symbol (str): Trading pair symbol.
-        interval (str): Time interval.
-        train_ratio (float): The fraction of data to use for training (0.0 to 1.0).
-        val_ratio (float): The fraction of data to use for validation (0.0 to 1.0).
-        features_to_use (Optional[List[str]]): A list of feature column names to use.
-                                               If None, all available features are used.
-
-    Returns:
-        Tuple[pd.DataFrame, pd.DataFrame, pd.DataFrame, pd.Series, pd.Series, pd.Series, pd.DataFrame, pd.Series]:
-        X_train, X_val, X_test, y_train, y_val, y_test DataFrames/Series (after removing NA labels and features),
-        X_full_cleaned, y_full_cleaned (full data after removing NA labels and features for tuning).
-
-    Raises:
-        FileNotFoundError: If data files are not found (raised by DataManager).
-        ValueError: If data is empty, splitting is not possible, ratios are invalid, or features
-                    contain unexpected non-numeric values, or specified features are missing.
-        TypeError: If data types or indices are incorrect after loading.
-        RuntimeError: For other data processing issues.
-    """
+) -> Tuple[pd.DataFrame, pd.DataFrame, pd.Series, pd.Series, pd.DataFrame, pd.Series]:
     logger.info(f"Loading data for {symbol.upper()} @ {interval}...")
 
     dm = DataManager()
 
     try:
-        # --- Load processed data (features) using DataManager ---
         logger.info(f"Attempting to load processed data (features) for {symbol.upper()} {interval}")
         X = dm.load_data(
             symbol=symbol.upper(),
@@ -390,20 +352,16 @@ def load_and_split_data(
         )
         logger.info(f"Successfully loaded features. Shape: {X.shape}")
 
-        # --- Explicitly drop 'open_time' column if it exists ---
         if 'open_time' in X.columns:
             X = X.drop(columns=['open_time'])
             logger.info("Dropped 'open_time' column from features DataFrame.")
 
 
-        # --- Load labeled data using DataManager ---
-        # User requested to load labeled data WITHOUT strategy-specific suffix
         logger.info(f"Attempting to load labeled data for {symbol.upper()} {interval}")
         ydf = dm.load_data(
             symbol=symbol.upper(),
             interval=interval,
             data_type='labeled',
-            # REMOVED: name_suffix=f'_{label_strategy}'
         )
         logger.info(f"Successfully loaded labels. Shape: {ydf.shape}")
 
@@ -415,7 +373,6 @@ def load_and_split_data(
         raise RuntimeError(f"Data loading failed: {e}")
 
 
-    # --- Validate Feature Data Types ---
     logger.info("Validating feature data types...")
     non_numeric_issues = {}
     known_non_feature_cols = ['open', 'high', 'low', 'close', 'volume', 'vol_adj']
@@ -440,7 +397,6 @@ def load_and_split_data(
     logger.info("Feature data type validation complete.")
 
 
-    # Align indices of features and labels DataFrames
     logger.info("Aligning features and labels indices...")
     if not isinstance(X.index, pd.DatetimeIndex):
          logger.error("Features DataFrame index is not a DatetimeIndex.")
@@ -462,7 +418,6 @@ def load_and_split_data(
     logger.info(f"Data aligned to common index. Shape: {X.shape}")
 
 
-    # Drop original price/volume columns from features if they are still present
     raw_ohlcv_volume_and_labeling_cols = ['open', 'high', 'low', 'close', 'volume', 'vol_adj']
     cols_to_drop_if_present = [col for col in raw_ohlcv_volume_and_labeling_cols if col in X.columns]
 
@@ -471,7 +426,6 @@ def load_and_split_data(
         logger.info(f"Dropped potential non-feature columns from features: {cols_to_drop_if_present}")
 
 
-    # --- Select Feature Subset if provided ---
     if features_to_use is not None:
         logger.info(f"Using a specific feature subset for training: {features_to_use}")
         missing_features = [feat for feat in features_to_use if feat not in X.columns]
@@ -485,14 +439,12 @@ def load_and_split_data(
         logger.info("No specific feature subset provided. Using all available features.")
 
 
-    # Extract labels
     if 'label' not in ydf.columns:
          logger.error("Labeled data is missing the 'label' column.")
          raise ValueError("Labeled data is missing the 'label' column.")
 
     y = ydf['label']
 
-    # --- IMPORTANT: Remove rows with NA labels AND NA features BEFORE splitting ---
     initial_rows = len(X)
     valid_labels_mask = pd.notna(y)
     feature_columns_after_drop_and_subset = X.columns.tolist()
@@ -517,46 +469,29 @@ def load_and_split_data(
     y_full_cleaned = y_full_cleaned.astype(int)
 
 
-    # --- Perform time-series split into Train, Validation, and Test sets ---
     n_samples = len(X_full_cleaned)
     if n_samples == 0:
          logger.error("No data points available for splitting after cleaning.")
          raise ValueError("No data points available for training after cleaning.")
 
-    train_end_idx = int(n_samples * train_ratio)
-    val_size = int(n_samples * val_ratio)
-    test_size = n_samples - train_end_idx - val_size
+    train_end_idx = int(n_samples * train_split_ratio)
+    test_size = n_samples - train_end_idx
 
     if train_end_idx <= 0:
-        logger.error(f"Train set size ({train_end_idx}) is not positive. Adjust train_ratio.")
+        logger.error(f"Train set size ({train_end_idx}) is not positive. Adjust train_split_ratio.")
         raise ValueError("Train set size is zero or negative.")
-
-    if val_ratio > 0 and val_size <= 0 and train_end_idx < n_samples:
-         val_size = 1
-         logger.warning("Adjusted validation size to 1 due to rounding or small dataset.")
-         test_size = n_samples - train_end_idx - val_size
 
     if test_size < 0:
          test_size = 0
          logger.warning("Adjusted test size to 0 as calculated size was negative.")
 
-    val_end_idx = train_end_idx + val_size
-
-    if train_end_idx + val_size + test_size != n_samples:
-         logger.error(f"Split size mismatch: train={train_end_idx}, val={val_size}, test={test_size}, total={train_end_idx + val_size + test_size}, expected={n_samples}")
-         raise RuntimeError("Data split size mismatch.")
-
-
     X_train = X_full_cleaned.iloc[:train_end_idx].copy()
     y_train = y_full_cleaned.iloc[:train_end_idx].copy()
 
-    X_val = X_full_cleaned.iloc[train_end_idx:val_end_idx].copy()
-    y_val = y_full_cleaned.iloc[train_end_idx:val_end_idx].copy()
+    X_test = X_full_cleaned.iloc[train_end_idx:].copy()
+    y_test = y_full_cleaned.iloc[train_end_idx:].copy()
 
-    X_test = X_full_cleaned.iloc[val_end_idx:].copy()
-    y_test = y_full_cleaned.iloc[val_end_idx:].copy()
-
-    logger.info(f"Data split into training ({len(X_train)} samples), validation ({len(X_val)} samples), and testing ({len(X_test)} samples).")
+    logger.info(f"Data split into training ({len(X_train)} samples) and testing ({len(X_test)} samples).")
 
     if X_train.empty:
          logger.error("Training set is empty after splitting.")
@@ -569,49 +504,26 @@ def load_and_split_data(
 
     if not y_train.empty:
         logger.info(f"Training set class distribution:\n{y_train.value_counts(normalize=True).sort_index()}")
-    if not y_val.empty:
-        logger.info(f"Validation set class distribution:\n{y_val.value_counts(normalize=True).sort_index()}")
     if not y_test.empty:
         logger.info(f"Test set class distribution:\n{y_test.value_counts(normalize=True).sort_index()}")
 
 
     logger.info("Data loading and splitting complete.")
-    return X_train, X_val, X_test, y_train, y_val, y_test, X_full_cleaned, y_full_cleaned
+    return X_train, X_test, y_train, y_test, X_full_cleaned, y_full_cleaned
 
 
-# --- Main Training Function ---
 def main(
     symbol: str,
     interval: str,
     model_key: str,
-    # REMOVED: label_strategy: str, as it's no longer needed for loading the labeled file
-    train_ratio: float,
     skip_tuning: bool = False,
     features_to_use: Optional[List[str]] = None,
-    enable_pca: bool = False, # New argument
-    pca_n_components: Optional[Union[int, float]] = None # New argument
+    enable_pca: bool = False,
+    pca_n_components: Optional[Union[int, float]] = None
 ):
-    """
-    Main function to load data, tune hyperparameters (optionally), train, evaluate, and save a model
-    for ternary classification. Allows specifying a subset of features and PCA.
-    Uses DataManager for loading data and saving model artifacts.
-
-    Args:
-        symbol (str): Trading pair symbol.
-        interval (str): Time interval.
-        model_key (str): Key for the model configuration in config.params.MODEL_CONFIG.
-        train_ratio (float): The fraction of data to use for training (0.0 to 1.0).
-        skip_tuning (bool): If True, skip hyperparameter tuning and use default params.
-        features_to_use (Optional[List[str]]): A list of feature column names to use.
-                                               If None, all available features are used.
-        enable_pca (bool): If True, enable PCA dimensionality reduction.
-        pca_n_components (Optional[Union[int, float]]): Number of PCA components or variance explained.
-    """
     start_time = time.time()
     logger.info(f"Starting model training pipeline for {symbol.upper()} @ {interval} with model: {model_key} (Ternary Classification)")
-    logger.info(f"Training ratio: {train_ratio}")
     logger.info(f"Hyperparameter tuning enabled: {not skip_tuning}")
-    # REMOVED: logger.info(f"Using labeling strategy: {label_strategy}")
     if features_to_use is not None:
         logger.info(f"Using specified feature subset: {features_to_use}")
     else:
@@ -623,40 +535,27 @@ def main(
         logger.info("PCA dimensionality reduction disabled.")
 
 
-    # --- Retrieve Model Configuration ---
-    if model_key not in MODEL_CONFIG:
-        logger.error(f"Unknown model key '{model_key}' not found in config.params.MODEL_CONFIG.")
-        available_model_keys = [key for key in MODEL_CONFIG.keys() if 'model_type' in MODEL_CONFIG[key]]
-        logger.error(f"Available model keys: {available_model_keys}")
-        sys.exit(1)
+    model_config_for_trainer = copy.deepcopy(app_config.model)
+    # --- FIX 1: Set the model_type based on the command-line argument ---
+    model_config_for_trainer.model_type = model_key
+    model_config_for_trainer.features_to_use = features_to_use
 
-    model_specific_config = copy.deepcopy(MODEL_CONFIG[model_key])
-    model_specific_config['features_to_use'] = features_to_use
-    val_ratio = model_specific_config.get('val_ratio', 0.1)
-    logger.info(f"Validation ratio: {val_ratio}")
-
-    # --- Apply PCA settings from command line to model_specific_config ---
     if enable_pca:
-        model_specific_config.setdefault('dimensionality_reduction', {})
-        model_specific_config['dimensionality_reduction']['enabled'] = True
-        model_specific_config['dimensionality_reduction'].setdefault('params', {})
+        model_config_for_trainer.pca_enabled = True
         if pca_n_components is not None:
-            model_specific_config['dimensionality_reduction']['params']['n_components'] = pca_n_components
+            model_config_for_trainer.pca_n_components = pca_n_components
         else:
-            # If --enable_pca is used but --pca_components is not, use default from params.py
-            # If params.py also doesn't have it, PCA will default to n_components=None (all components)
-            logger.info("No specific n_components provided for PCA. Using default from config/params.py or PCA default (all components).")
+            logger.info("No specific n_components provided for PCA. Using default from ModelConfig.")
     else:
-        # Ensure PCA is explicitly disabled in the config if the flag is not set
-        if 'dimensionality_reduction' in model_specific_config:
-            model_specific_config['dimensionality_reduction']['enabled'] = False
+        model_config_for_trainer.pca_enabled = False
 
 
-    # --- Load and Split Data ---
     try:
-        # Pass the label_strategy to load_and_split_data
-        X_tr, X_val, X_test, y_tr, y_val, y_test, X_full_cleaned, y_full_cleaned = load_and_split_data(
-            symbol, interval, train_ratio, val_ratio, features_to_use=features_to_use
+        X_tr, X_test, y_tr, y_test, X_full_cleaned, y_full_cleaned = load_and_split_data(
+            symbol,
+            interval,
+            train_split_ratio=model_config_for_trainer.train_test_split_ratio,
+            features_to_use=features_to_use
         )
     except (FileNotFoundError, ValueError, TypeError, RuntimeError) as e:
         logger.error(f"Failed to load or split data: {e}")
@@ -666,7 +565,6 @@ def main(
         sys.exit(1)
 
 
-    # --- Hyperparameter Tuning (Conditional) ---
     if not skip_tuning and model_key != 'lstm':
         logger.info(f"Starting hyperparameter tuning for {model_key}...")
         try:
@@ -674,31 +572,50 @@ def main(
                 model_key,
                 X_full_cleaned,
                 y_full_cleaned,
-                model_specific_config # Pass the config with PCA settings
+                model_config_for_trainer
             )
 
             logger.info(f"Hyperparameter tuning complete for {model_key}. Best parameters found: {tuned_params}")
-            model_specific_config['params'] = tuned_params
-            logger.info(f"Updated model config with best tuning parameters: {model_specific_config}")
+            if model_key == 'random_forest':
+                model_config_for_trainer.random_forest_params = RandomForestParams(**tuned_params)
+            elif model_key == 'xgboost':
+                model_config_for_trainer.xgboost_params = XGBoostParams(**tuned_params)
+
+            logger.info(f"Updated model config with best tuning parameters: {model_config_for_trainer}")
 
         except (ValueError, RuntimeError) as e:
             logger.error(f"Hyperparameter tuning failed: {e}")
-            logger.warning(f"Proceeding with training using default parameters from config.params.MODEL_CONFIG for {model_key}.")
+            logger.warning(f"Proceeding with training using parameters from app_config.model for {model_key}.")
         except Exception as e:
             logger.error(f"An unexpected error occurred during hyperparameter tuning: {e}", exc_info=True)
-            logger.warning(f"Proceeding with training using default parameters from config.params.MODEL_CONFIG for {model_key}.")
+            logger.warning(f"Proceeding with training using parameters from app_config.model for {model_key}.")
 
-    # --- Initialize and Train Model with (potentially) Tuned Parameters ---
     logger.info(f"Initializing and training {model_key} model with updated parameters...")
     try:
-        trainer = ModelTrainer(config=model_specific_config)
+        # --- FIX 2: Prepare validation data for XGBoost early stopping if not tuning and enabled ---
+        X_val_for_trainer = pd.DataFrame()
+        y_val_for_trainer = pd.Series(dtype=int)
 
-        if not X_val.empty and not y_val.empty:
-             logger.info("Passing training and validation data to trainer.")
-             trainer.train(X_tr, y_tr, X_val, y_val)
-        else:
-             logger.info("Passing training data to trainer (validation set is empty).")
-             trainer.train(X_tr, y_tr)
+        if model_key == 'xgboost' and not skip_tuning and model_config_for_trainer.xgboost_params.early_stopping_rounds is not None:
+            # If early stopping is enabled for XGBoost but no explicit tuning/validation split,
+            # create a small validation set from training data.
+            # Using simple train_test_split for this internal validation set for simplicity
+            # since TimeSeriesSplit is more complex to subset within this context.
+            if len(X_tr) > 1000: # Ensure enough data to split
+                X_tr, X_val_for_trainer, y_tr, y_val_for_trainer = train_test_split(
+                    X_tr, y_tr,
+                    test_size=0.1, # Use 10% of training data for validation
+                    shuffle=False, # Maintain time series order
+                    stratify=None # Stratification can be tricky with time series, keep it simple
+                )
+                logger.info(f"Created internal validation set for XGBoost early stopping: {len(X_val_for_trainer)} samples.")
+            else:
+                logger.warning("Not enough training data to create internal validation set for XGBoost early stopping. Disabling early stopping.")
+                model_config_for_trainer.xgboost_params.early_stopping_rounds = None
+
+
+        trainer = ModelTrainer(model_config=model_config_for_trainer)
+        trainer.train(X_tr, y_tr, X_val=X_val_for_trainer, y_val=y_val_for_trainer)
 
 
     except (ValueError, TypeError, ImportError, RuntimeError) as e:
@@ -709,7 +626,6 @@ def main(
         sys.exit(1)
 
 
-    # --- Evaluate Model ---
     logger.info("Evaluating model on test set...")
     try:
         if not X_test.empty and not y_test.empty:
@@ -725,7 +641,6 @@ def main(
     except Exception as e:
         logger.error(f"An unexpected error occurred during evaluation: {e}", exc_info=True)
 
-    # --- Save Model ---
     logger.info("Saving trained model using DataManager...")
     try:
         trainer.save(
@@ -748,7 +663,6 @@ def main(
     logger.info(f"Pipeline complete for {symbol.upper()} @ {interval} with model: {model_key}")
 
 
-# --- Script Entry Point ---
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(
         description='Train, evaluate, and save a trading model for ternary classification.'
@@ -774,15 +688,9 @@ if __name__ == "__main__":
         help="Model type to train. Available: ['random_forest', 'xgboost', 'lstm']. Default: xgboost."
     )
     parser.add_argument(
-        '--train_ratio',
-        type=float,
-        default=0.8,
-        help='Fraction of data to use for training (0.0 to 1.0, exclusive). Default: 0.8'
-    )
-    parser.add_argument(
         '--skip_tuning',
         action='store_true',
-        help='Skip hyperparameter tuning and use default parameters from config.params.MODEL_CONFIG.'
+        help='Skip hyperparameter tuning and use default parameters from app_config.model.'
     )
     parser.add_argument(
         '--features',
@@ -800,40 +708,26 @@ if __name__ == "__main__":
         type=lambda x: int(x) if x.isdigit() else float(x),
         default=None,
         help='Number of PCA components (int) or variance to explain (float between 0 and 1). '
-             'Default from config/params.py if not specified.'
+             'Default from ModelConfig if not specified.'
     )
 
-
     args = parser.parse_args()
-
-    if not (0.0 < args.train_ratio < 1.0):
-         logger.error(f"Invalid train_ratio value: {args.train_ratio}. Must be between 0.0 and 1.0 (exclusive).")
-         sys.exit(1)
-
-    model_specific_config_for_val_check = MODEL_CONFIG.get(args.model, {})
-    val_ratio_check = model_specific_config_for_val_check.get('val_ratio', 0.1)
-
-    if not (0.0 <= val_ratio_check < 1.0 and (args.train_ratio + val_ratio_check) <= 1.0):
-         logger.error(f"Invalid val_ratio value ({val_ratio_check}) or combination with train_ratio ({args.train_ratio}). Ensure 0 <= val_ratio, and train_ratio + val_ratio <= 1.")
-         sys.exit(1)
-
 
     try:
         main(
             symbol=args.symbol,
             interval=args.interval,
             model_key=args.model,
-            train_ratio=args.train_ratio,
             skip_tuning=args.skip_tuning,
             features_to_use=args.features,
-            enable_pca=args.enable_pca, # Pass new argument
-            pca_n_components=args.pca_components # Pass new argument
+            enable_pca=args.enable_pca,
+            pca_n_components=args.pca_components
         )
 
     except SystemExit:
          pass
     except Exception:
-        logger.exception("Model training script terminated due to an unhandled error.")
+        logger.exception("Model training script terminated due-to an unhandled error.")
         sys.exit(1)
 
     """
@@ -846,7 +740,7 @@ if __name__ == "__main__":
         python scripts.train_model.py --symbol ADAUSDT --interval 5m --model random_forest
 
     Train the LSTM model (requires TensorFlow):
-        python scripts.train_model.py --symbol ETHUSDT --interval 15m --model lstm --train_ratio 0.7
+        python scripts.train_model.py --symbol ETHUSDT --interval 15m --model lstm
 
     Train with tuning (default for non-LSTM):
         python -m scripts.train_model --symbol ADAUSDT --interval 5m --model random_forest
@@ -865,7 +759,7 @@ if __name__ == "__main__":
         python scripts/train_model.py --symbol ADAUSDT --interval 5m --model random_forest --enable_pca --pca_components 10
 
     Ensure you have processed and labeled data files (including label 0) in your data/
-    and config/params.py (with MODEL_CONFIG, GENERAL_CONFIG) and config/paths.py are correctly configured
+    and config/params.py (with AppConfig) and config/paths.py are correctly configured
     (including 'trained_models_dir' path and 'trained_model_pattern').
     The feature generation script must produce an ATR column named 'atr_{lookback}'
     (e.g., 'atr_14') matching the 'vol_adj_lookback' parameter in LABELING_CONFIG

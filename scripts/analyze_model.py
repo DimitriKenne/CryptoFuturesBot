@@ -9,43 +9,21 @@ Includes enhanced analysis based on label generator diagnostics and feature impo
 Logs are saved to a single file in the logs directory specified in paths.py,
 with clear markers for each analysis run, using the centralized rotating logger.
 
-**FIXED**: Updated DataManager calls to use the new parameterized methods (load_data, load_model_artifact).
-**FIXED**: Removed manual path construction for data and model files, relying on DataManager.
-**FIXED**: Corrected the check for infinite values by using np.isinf() on each numeric column Series.
-**FIXED**: Removed redundant plt.legend() call for probability plot to allow seaborn to handle legend labels.
-**MODIFIED**: Added support for analyzing LSTM models, including loading and probability prediction.
-**MODIFIED**: Adjusted feature importance analysis to handle models without standard importance attributes (like LSTM).
-**FIXED**: Aligned data and model loading paths with keys defined in paths.py.
-**FIXED**: Corrected LSTM prediction logic for the test set to predict for each sequence.
-**FIXED**: Imported Counter from collections to resolve NameError.
-**FIXED**: Removed kde=True from sns.histplot to prevent ValueError with limited unique data points.
-**FIXED**: Added a more robust check before plotting probability histogram to ensure both correct/incorrect predictions are present in the data subset being plotted.
-**FIXED**: Added type and column validation before prediction to prevent ValueError in ColumnTransformer when input is not a DataFrame.
-**FIXED**: Added missing imports for `datetime`, `joblib`, and `to_categorical`.
-**FIXED**: Corrected setup_rotating_logging keyword argument name.
-**ADDED**: More robust error handling and logging.
-**FIXED**: Corrected ModelTrainer initialization call to pass config dictionary.
-**FIXED**: Use trainer.feature_columns_original to select features for X_test.
-**FIXED**: Corrected ModelTrainer.predict and predict_proba to pass original DataFrame to scikit-learn pipeline.
-**FIXED**: Removed 'labels' argument from balanced_accuracy_score call for compatibility with older scikit-learn versions.
-**FIXED**: Use DataManager.save_model_artifact to save evaluation results dictionary.
-**ADDED**: Definitions for plotting functions (confusion matrix, feature importance, probability distributions, ROC AUC, Precision-Recall).
-**FIXED**: Corrected sns.barplot call for feature importance to resolve FutureWarning (again, ensuring it's in this version).
-**FIXED**: Refined DataManager loading calls within ModelTrainer to ensure correct artifact types and names are used.
-**FIXED**: Ensured consistent use of `all_expected_labels` for metrics and plotting functions.
-**FIXED**: Added checks for minimum unique classes before attempting ROC/PR plots.
-**FIXED**: Added checks for probability columns existence before plotting histograms.
-**FIXED**: Corrected variable name from 'data_manager' to 'dm' where the DataManager instance is used.
-**ADDED**: Handling for NaN values in predictions before calculating evaluation metrics.
-**FIXED**: Passed `symbol`, `interval`, and `model_key` explicitly to plotting functions to resolve `NameError`.
-**FIXED**: Corrected the call to `setup_rotating_logging` to match its signature in `logger_config.py`.
-**FIXED**: Passed `y_proba_df`, `y_test_evaluated`, and `all_expected_labels` from `evaluate_model` to `analyse_model_pipeline` and then to plotting functions.
-**FIXED**: Passed `dm` and `train_ratio` to `evaluate_model`.
-**FIXED**: Added `plot_calibration_curve` function definition.
-**REVERTED**: Removed manual reshaping for LSTM in `evaluate_model` and instead pass original `X_test` to `ModelTrainer`'s `predict` and `predict_proba` methods, as `ModelTrainer` handles internal data preparation.
-**FIXED**: Modified `load_trained_model_and_preprocessor` to return the `ModelTrainer` instance directly, allowing `evaluate_model` to call its methods.
-**FIXED**: Corrected feature names for feature importance plotting when PCA is enabled.
-**FIXED**: Corrected feature importance filename pattern to avoid duplication of model_key.
+MODIFIED: Updated to use `app_config` for all configuration access, ensuring consistency.
+MODIFIED: `load_trained_model_and_preprocessor` now initializes `ModelTrainer` without
+          explicit config, as `trainer.load()` handles loading the saved configuration.
+MODIFIED: Feature selection in `load_and_prepare_data` now explicitly uses the
+          `original_feature_columns` from the loaded `ModelTrainer` instance,
+          guaranteeing analysis is done on the features the model was trained on.
+MODIFIED: Simplified default argument parsing to rely on `app_config`.
+MODIFIED: Refined logic for handling empty dataframes and potential NaN predictions
+          before evaluation and plotting.
+MODIFIED: Ensured `all_expected_labels` consistently represents [-1, 0, 1] for metrics and plots.
+MODIFIED: Updated plotting functions to correctly receive and use `all_expected_labels`,
+          and to handle cases where probability data might be empty.
+MODIFIED: Removed redundant `val_ratio_check` as this script focuses on analysis
+          and does not perform model training or validation splitting in the same way.
+FIXED: Ensured `sys.path.insert` is correctly placed relative to `PROJECT_ROOT`.
 """
 
 import sys
@@ -56,39 +34,26 @@ from typing import Tuple, List, Dict, Any, Optional
 from collections import Counter
 import time
 import copy
-from datetime import datetime # Import datetime
+from datetime import datetime
 
 import pandas as pd
 import numpy as np
 
-# Import scikit-learn and imblearn components for analysis/evaluation
-from sklearn.metrics import (balanced_accuracy_score, classification_report,
-                             confusion_matrix, accuracy_score, roc_curve, auc,
-                             precision_recall_curve, average_precision_score,
-                             f1_score, precision_score, recall_score)
+# Import scikit-learn components for analysis/evaluation
+from sklearn.metrics import (accuracy_score, balanced_accuracy_score, classification_report,
+                             confusion_matrix, roc_curve, auc,
+                             precision_recall_curve, average_precision_score)
 from sklearn.utils import column_or_1d
 from sklearn.preprocessing import label_binarize
-from sklearn.calibration import calibration_curve # Import calibration_curve
+from sklearn.calibration import calibration_curve
 
-# Conditional import for TensorFlow/Keras for LSTM
+# Conditional import for TensorFlow/Keras for LSTM (now handled via app_config.model)
+# We still need the raw import for type hinting/checking.
 try:
-    import tensorflow as tf
-    from tensorflow.keras.models import load_model as keras_load_model # type: ignore
-    from tensorflow.keras.utils import to_categorical # type: ignore
-    _TF_AVAILABLE = True
-    _TF_GPU_AVAILABLE = tf.config.list_physical_devices('GPU')
-    if _TF_GPU_AVAILABLE:
-        print(f"TensorFlow GPU detected: {_TF_GPU_AVAILABLE}")
-        logging.info(f"TensorFlow GPU detected: {_TF_GPU_AVAILABLE}")
-    else:
-        print("TensorFlow GPU not detected.")
-        logging.info("TensorFlow GPU not detected.")
+    import tensorflow as tf # type: ignore
+    _TF_IMPORTED = True
 except ImportError:
-    _TF_AVAILABLE = False
-    _TF_GPU_AVAILABLE = False
-    print("TensorFlow not installed. LSTM model analysis will be skipped.")
-    logging.warning("TensorFlow not installed. LSTM model analysis will be skipped.")
-
+    _TF_IMPORTED = False
 
 # Add project root to Python path
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
@@ -97,53 +62,53 @@ sys.path.insert(0, str(PROJECT_ROOT))
 # Import configuration and utilities
 try:
     from config.paths import PATHS
-    from config.params import MODEL_CONFIG, GENERAL_CONFIG, LABELING_CONFIG, FEATURE_CONFIG
+    from config.params import app_config # Use app_config as the central config object
     from utils.data_manager import DataManager
     from utils.logger_config import setup_rotating_logging
-    from utils.model_trainer import ModelTrainer
-    from utils.exceptions import TemporalSafetyError, ModelAnalysisError # Import ModelAnalysisError
+    from utils.training.model_trainer import ModelTrainer
+    from utils.exceptions import TemporalSafetyError, ModelAnalysisError
 except ImportError as e:
-    print(f"CRITICAL ERROR: Failed to import necessary modules: {e}")
+    print(f"CRITICAL ERROR: Failed to import necessary modules: {e}", file=sys.stderr)
     sys.exit(1)
+except FileNotFoundError as e:
+    print(f"CRITICAL ERROR: Configuration file not found: {e}. Ensure config/params.py and config/paths.py exist.", file=sys.stderr)
+    sys.exit(1)
+except AttributeError as e:
+    print(f"CRITICAL ERROR: Configuration object missing expected attribute or key: {e}. Check config/params.py and config/paths.py.", file=sys.stderr)
+    sys.exit(1)
+except Exception as e:
+    print(f"CRITICAL ERROR: An unexpected error occurred during initial imports or configuration loading: {e}", file=sys.stderr)
+    sys.exit(1)
+
 
 # Set up logging for this script
 log_filepath = PATHS['logs_dir'] / f"{Path(__file__).stem}.log"
-# Corrected call to setup_rotating_logging
 logger = setup_rotating_logging(
-    Path(__file__).stem, # Pass the base filename as the first positional argument
-    log_level=logging.INFO # Use the correct keyword argument for level
+    Path(__file__).stem,
+    log_level=logging.INFO
 )
 
-# Custom exception for analysis errors (now imported from exceptions.py)
-# class ModelAnalysisError(Exception):
-#     """Custom exception for errors during model analysis."""
-#     pass
+# Log TensorFlow status from app_config
+if app_config.model.TF_AVAILABLE:
+    logger.info(f"TensorFlow (version {getattr(app_config.model.tf, '__version__', 'unknown')}) imported successfully via app_config.model.tf.")
+    if app_config.model.tf.config.list_physical_devices('GPU'):
+        logger.info("GPU is available and enabled for TensorFlow.")
+    else:
+        logger.info("GPU is not available or not enabled for TensorFlow.")
+else:
+    logger.warning("TensorFlow not found. LSTM model analysis will be skipped.")
 
-def log_analysis_start_end(func):
-    """Decorator to log the start and end of analysis functions."""
-    def wrapper(*args, **kwargs):
-        logger.info(f"--- Starting {func.__name__.replace('_', ' ').title()} ---")
-        try:
-            result = func(*args, **kwargs)
-            logger.info(f"--- Finished {func.__name__.replace('_', ' ').title()} ---")
-            return result
-        except Exception as e:
-            logger.error(f"Error in {func.__name__.replace('_', ' ').title()}: {e}", exc_info=True)
-            raise ModelAnalysisError(f"Failed during {func.__name__.replace('_', ' ').title()}") from e
-    return wrapper
 
 # --- Plotting Libraries (Conditional on PLOT_AVAILABLE) ---
-# Import matplotlib and seaborn unconditionally, then use PLOT_AVAILABLE to guard calls.
 try:
     import matplotlib.pyplot as plt
     import seaborn as sns
     sns.set_style("whitegrid")
-    plt.switch_backend('Agg') # Use Agg backend for matplotlib to prevent display issues in environments without GUI
+    plt.switch_backend('Agg')
     PLOT_AVAILABLE = True
 except ImportError:
     logger.warning("Matplotlib or Seaborn not found. Plotting will be skipped. Install using 'pip install matplotlib seaborn'.")
     PLOT_AVAILABLE = False
-    # No need to set plt = None or sns = None here, as PLOT_AVAILABLE will guard their use.
 
 
 # Helper to clean data (copied from train_model for consistency)
@@ -161,36 +126,47 @@ def clean_data(df: pd.DataFrame, cols_to_check: List[str]) -> pd.DataFrame:
                       from the specified columns.
     """
     initial_rows = len(df)
-    df_cleaned = df.copy() # Work on a copy
+    df_cleaned = df.copy()
 
-    # Ensure cols_to_check are actually in df_cleaned after the copy
     cols_to_check_present = [col for col in cols_to_check if col in df_cleaned.columns]
     if not cols_to_check_present:
-         logger.warning("None of the specified columns to check for NaNs are present in the DataFrame.")
-         return df_cleaned # Return copy if no columns to check
+        logger.warning("None of the specified columns to check for NaNs are present in the DataFrame. Returning original DataFrame copy.")
+        return df_cleaned
 
     df_cleaned.dropna(subset=cols_to_check_present, inplace=True)
 
-
-    # Check for Infinite values in numeric specified columns
     numeric_cols_to_check = [col for col in cols_to_check_present if col in df_cleaned.columns and pd.api.types.is_numeric_dtype(df_cleaned[col])]
 
     for col in numeric_cols_to_check:
-         if np.isinf(df_cleaned[col]).any():
-              logger.warning(f"Infinite values found in column '{col}'. Removing rows with Inf.")
-              df_cleaned = df_cleaned[~np.isinf(df_cleaned[col])]
-
+        if np.isinf(df_cleaned[col]).any():
+            logger.warning(f"Infinite values found in column '{col}'. Replacing with NaN and dropping rows.")
+            df_cleaned.replace([np.inf, -np.inf], np.nan, inplace=True)
+            df_cleaned.dropna(subset=[col], inplace=True)
 
     removed_rows = initial_rows - len(df_cleaned)
     if removed_rows > 0:
-         logger.info(f"Removed {removed_rows} rows with NA or Inf values in specified columns.")
+        logger.info(f"Removed {removed_rows} rows with NA or Inf values in specified columns. Remaining rows: {len(df_cleaned)}")
 
     return df_cleaned
 
 
+def log_analysis_start_end(func):
+    """Decorator to log the start and end of analysis functions."""
+    def wrapper(*args, **kwargs):
+        logger.info(f"--- Starting {func.__name__.replace('_', ' ').title()} ---")
+        try:
+            result = func(*args, **kwargs)
+            logger.info(f"--- Finished {func.__name__.replace('_', ' ').title()} ---")
+            return result
+        except Exception as e:
+            logger.error(f"Error in {func.__name__.replace('_', ' ').title()}: {e}", exc_info=True)
+            raise ModelAnalysisError(f"Failed during {func.__name__.replace('_', ' ').title()}") from e
+    return wrapper
+
+
 # --- Plotting Functions (Always defined, but check PLOT_AVAILABLE internally) ---
 
-def plot_confusion_matrix(cm: np.ndarray, classes: list, save_path: Path, symbol: str, interval: str, model_key: str, title: str = 'Confusion Matrix'):
+def plot_confusion_matrix(cm: np.ndarray, classes: list, save_path: Path, symbol: str, interval: str, model_key: str):
     """
     Plots the confusion matrix using seaborn.
     """
@@ -200,7 +176,6 @@ def plot_confusion_matrix(cm: np.ndarray, classes: list, save_path: Path, symbol
 
     plt.figure(figsize=(8, 6))
     sns.heatmap(cm, annot=True, fmt='d', cmap='Blues', xticklabels=classes, yticklabels=classes)
-    # Use the passed symbol, interval, model_key for the title
     plt.title(f'Confusion Matrix for {model_key.replace("_", " ").title()} ({symbol} {interval})')
     plt.xlabel('Predicted Label')
     plt.ylabel('True Label')
@@ -211,10 +186,9 @@ def plot_confusion_matrix(cm: np.ndarray, classes: list, save_path: Path, symbol
     except Exception as e:
         logger.error(f"Error saving confusion matrix plot to {save_path}: {e}", exc_info=True)
     finally:
-        plt.close() # Close the figure to free memory
+        plt.close()
 
-
-def plot_feature_importance(importances: Dict[str, float], save_path: Path, symbol: str, interval: str, model_key: str, title: str = 'Feature Importance', top_n: int = 20):
+def plot_feature_importance(importances: Dict[str, float], save_path: Path, symbol: str, interval: str, model_key: str, top_n: int = 20):
     """
     Plots the top N feature importances.
     """
@@ -222,20 +196,22 @@ def plot_feature_importance(importances: Dict[str, float], save_path: Path, symb
         logger.warning("Skipping feature importance plot: Plotting libraries not available.")
         return
     if not importances:
-         logger.warning("No feature importances data to plot.")
-         return
+        logger.warning("No feature importances data to plot.")
+        return
 
     importance_series = pd.Series(importances).sort_values(ascending=False)
     top_importances = importance_series.head(top_n)
+
+    if top_importances.empty:
+        logger.warning("No top feature importances found after filtering.")
+        return
 
     plt.figure(figsize=(10, max(6, len(top_importances) * 0.4)))
     sns.barplot(x=top_importances.values, y=top_importances.index,
                 hue=top_importances.index, # Explicitly map hue to 'Feature' for distinct colors
                 palette='viridis',
-                legend=False) # Remove legend if hue is used for color mapping
-
-    # Use the passed symbol, interval, model_key for the title
-    plt.title(f'Feature Importance (Top {top_n})\n{symbol.upper()} {interval} ({model_key})')
+                legend=False)
+    plt.title(f'Feature Importance (Top {min(top_n, len(top_importances))})\n{symbol.upper()} {interval} ({model_key.replace("_", " ").title()})')
     plt.xlabel('Importance')
     plt.ylabel('Feature')
     plt.tight_layout()
@@ -248,7 +224,7 @@ def plot_feature_importance(importances: Dict[str, float], save_path: Path, symb
         plt.close()
 
 
-def plot_probability_histograms(y_true: pd.Series, y_proba: np.ndarray, classes: list, save_path: Path, symbol: str, interval: str, model_key: str, title: str = 'Prediction Probability Distributions'):
+def plot_probability_histograms(y_true: pd.Series, y_proba: np.ndarray, classes: list, save_path: Path, symbol: str, interval: str, model_key: str):
     """
     Plots histograms of predicted probabilities for each class, separated by true label.
     """
@@ -256,8 +232,8 @@ def plot_probability_histograms(y_true: pd.Series, y_proba: np.ndarray, classes:
         logger.warning("Skipping probability histograms plot: Plotting libraries not available.")
         return
     if y_true.empty or y_proba.shape[0] == 0 or y_proba.shape[1] != len(classes):
-         logger.warning("Insufficient data or incorrect shape for probability histogram plotting.")
-         return
+        logger.warning(f"Insufficient data or incorrect shape for probability histogram plotting. y_true_shape: {y_true.shape}, y_proba_shape: {y_proba.shape}, classes_len: {len(classes)}.")
+        return
 
     y_true_df = y_true.to_frame(name='true_label')
     proba_df = pd.DataFrame(y_proba, index=y_true_df.index, columns=classes)
@@ -269,33 +245,34 @@ def plot_probability_histograms(y_true: pd.Series, y_proba: np.ndarray, classes:
 
     fig, axes = plt.subplots(1, len(classes), figsize=(6 * len(classes), 5), sharey=True)
     if len(classes) == 1:
-         axes = [axes]
+        axes = [axes]
 
     for i, class_label in enumerate(classes):
-        proba_column = class_label
-        if proba_column not in merged_df.columns:
-             logger.warning(f"Probability column for class {class_label} not found in DataFrame. Skipping plot for this class.")
-             continue
+        if i >= proba_df.shape[1]: # Ensure the probability column exists
+            logger.warning(f"Probability column for class {class_label} (index {i}) not found in y_proba_df. Skipping plot for this class.")
+            continue
 
-        subset_data = merged_df[proba_column].dropna()
+        proba_column = classes[i] # Use the actual class label as column name
+
+        subset_data = merged_df[[proba_column, 'true_label']].dropna()
         if subset_data.empty:
-             logger.warning(f"Skipping probability histogram for class {class_label}: No non-NaN probability data.")
-             axes[i].set_title(f'Probabilities for Class {class_label}\n(No Data)')
-             axes[i].set_xlabel(f'Predicted Probability ({class_label})')
-             axes[i].set_ylabel('Density')
-             continue
+            logger.warning(f"Skipping probability histogram for class {class_label}: No non-NaN probability data or true labels.")
+            # Set up empty plot for visual consistency
+            axes[i].set_title(f'Probabilities for Class {class_label}\n(No Data)')
+            axes[i].set_xlabel(f'Predicted Probability ({class_label})')
+            axes[i].set_ylabel('Density')
+            continue
 
-        sns.histplot(data=merged_df, x=proba_column, hue='true_label', ax=axes[i], stat='density', common_norm=False, bins=30, palette='viridis')
+        sns.histplot(data=subset_data, x=proba_column, hue='true_label', ax=axes[i], stat='density', common_norm=False, bins=30, palette='viridis')
         axes[i].set_title(f'Probabilities for Class {class_label}')
         axes[i].set_xlabel(f'Predicted Probability ({class_label})')
         axes[i].set_ylabel('Density')
         if axes[i].get_legend() is None:
-             axes[i].legend(title='True Label')
+            axes[i].legend(title='True Label')
         else:
-             axes[i].get_legend().set_title('True Label')
+            axes[i].get_legend().set_title('True Label')
 
-    # Use the passed symbol, interval, model_key for the main title
-    fig.suptitle(f'Prediction Probability Distribution\n{symbol.upper()} {interval} ({model_key})', y=1.02)
+    fig.suptitle(f'Prediction Probability Distribution\n{symbol.upper()} {interval} ({model_key.replace("_", " ").title()})', y=1.02)
     plt.tight_layout()
     try:
         plt.savefig(save_path, dpi=150)
@@ -314,20 +291,23 @@ def plot_roc_auc(y_true: pd.Series, y_proba: np.ndarray, classes: list, output_d
         logger.warning("Skipping ROC AUC plot: Plotting libraries not available.")
         return
     if y_true.empty or y_proba.shape[0] == 0 or y_proba.shape[1] != len(classes):
-         logger.warning("Insufficient data or incorrect shape for ROC AUC plotting.")
-         return
+        logger.warning(f"Insufficient data or incorrect shape for ROC AUC plotting. y_true_shape: {y_true.shape}, y_proba_shape: {y_proba.shape}, classes_len: {len(classes)}.")
+        return
     unique_true_classes = np.unique(y_true.dropna())
     if len(unique_true_classes) < 2:
-         logger.warning(f"Skipping ROC AUC plot: Need at least two unique classes in true labels. Found: {unique_true_classes}")
-         return
+        logger.warning(f"Skipping ROC AUC plot: Need at least two unique classes in true labels. Found: {unique_true_classes}")
+        return
 
     sorted_classes = sorted(classes)
     y_true_clean = y_true.dropna()
-    y_proba_clean = pd.DataFrame(y_proba, index=y_true.index, columns=sorted_classes).loc[y_true_clean.index].values
+
+    # Ensure y_proba_clean aligns with y_true_clean's index, and only take the values
+    y_proba_df_temp = pd.DataFrame(y_proba, index=y_true.index, columns=sorted_classes)
+    y_proba_clean = y_proba_df_temp.loc[y_true_clean.index].values
 
     if y_true_clean.empty or y_proba_clean.shape[0] == 0:
-         logger.warning("Skipping ROC AUC plot: No non-NaN data points after cleaning true labels.")
-         return
+        logger.warning("Skipping ROC AUC plot: No non-NaN data points after cleaning true labels or probabilities.")
+        return
 
     y_true_bin = label_binarize(y_true_clean, classes=sorted_classes)
 
@@ -336,33 +316,33 @@ def plot_roc_auc(y_true: pd.Series, y_proba: np.ndarray, classes: list, output_d
     roc_auc = dict()
     for i, class_label in enumerate(sorted_classes):
         if y_true_bin.shape[1] > i and np.any(y_true_bin[:, i] == 1):
-             if y_proba_clean.shape[1] > i:
-                  fpr[i], tpr[i], _ = roc_curve(y_true_bin[:, i], y_proba_clean[:, i])
-                  roc_auc[i] = auc(fpr[i], tpr[i])
-             else:
-                  logger.warning(f"Skipping ROC AUC calculation for class {class_label}: Probability array does not have enough columns.")
-                  fpr[i], tpr[i], roc_auc[i] = None, None, None
+            if y_proba_clean.shape[1] > i:
+                fpr[i], tpr[i], _ = roc_curve(y_true_bin[:, i], y_proba_clean[:, i])
+                roc_auc[i] = auc(fpr[i], tpr[i])
+            else:
+                logger.warning(f"Skipping ROC AUC calculation for class {class_label}: Probability array does not have enough columns.")
+                fpr[i], tpr[i], roc_auc[i] = None, None, None
         else:
-             logger.warning(f"Skipping ROC AUC calculation for class {class_label}: No positive samples in true labels for this class.")
-             fpr[i], tpr[i], roc_auc[i] = None, None, None
+            logger.warning(f"Skipping ROC AUC calculation for class {class_label}: No positive samples in true labels for this class.")
+            fpr[i], tpr[i], roc_auc[i] = None, None, None
 
     plt.figure(figsize=(8, 6))
 
     for i, class_label in enumerate(sorted_classes):
         if roc_auc.get(i) is not None:
-             plt.plot(fpr[i], tpr[i], label=f'ROC curve of class {class_label} (area = {roc_auc[i]:0.2f})')
+            plt.plot(fpr[i], tpr[i], label=f'ROC curve of class {class_label} (area = {roc_auc[i]:0.2f})')
 
     plt.plot([0, 1], [0, 1], 'k--', label='Chance')
     plt.xlim([0.0, 1.0])
     plt.ylim([0.0, 1.05])
     plt.xlabel('False Positive Rate')
     plt.ylabel('True Positive Rate')
-    plt.title(f'Receiver Operating Characteristic (ROC) Curve\n{symbol.upper()} {interval} ({model_key})')
+    plt.title(f'Receiver Operating Characteristic (ROC) Curve\n{symbol.upper()} {interval} ({model_key.replace("_", " ").title()})')
     plt.legend(loc="lower right")
     plt.tight_layout()
 
     safe_interval = interval.replace(':', '_')
-    roc_auc_plot_path = output_dir / f"{symbol.upper()}_{safe_interval}_{model_key}_roc_auc_curve.png".replace(':', '_')
+    roc_auc_plot_path = output_dir / f"{symbol.upper()}_{safe_interval}_{model_key}_roc_auc_curve.png"
     try:
         plt.savefig(roc_auc_plot_path, dpi=150)
         logger.info(f"Saved ROC AUC plot to {roc_auc_plot_path}")
@@ -380,56 +360,56 @@ def plot_precision_recall_curve(y_true: pd.Series, y_proba: np.ndarray, classes:
         logger.warning("Skipping Precision-Recall plot: Plotting libraries not available.")
         return
     if y_true.empty or y_proba.shape[0] == 0 or y_proba.shape[1] != len(classes):
-         logger.warning("Insufficient data or incorrect shape for Precision-Recall plotting.")
-         return
+        logger.warning(f"Insufficient data or incorrect shape for Precision-Recall plotting. y_true_shape: {y_true.shape}, y_proba_shape: {y_proba.shape}, classes_len: {len(classes)}.")
+        return
     unique_true_classes = np.unique(y_true.dropna())
     if len(unique_true_classes) < 2:
-         logger.warning(f"Skipping Precision-Recall plot: Need at least two unique classes in true labels. Found: {unique_true_classes}")
-         return
+        logger.warning(f"Skipping Precision-Recall plot: Need at least two unique classes in true labels. Found: {unique_true_classes}")
+        return
 
     sorted_classes = sorted(classes)
     y_true_clean = y_true.dropna()
-    y_proba_clean = pd.DataFrame(y_proba, index=y_true.index, columns=sorted_classes).loc[y_true_clean.index].values
+    y_proba_df_temp = pd.DataFrame(y_proba, index=y_true.index, columns=sorted_classes)
+    y_proba_clean = y_proba_df_temp.loc[y_true_clean.index].values
 
     if y_true_clean.empty or y_proba_clean.shape[0] == 0:
-         logger.warning("Skipping Precision-Recall plot: No non-NaN data points after cleaning true labels.")
-         return
+        logger.warning("Skipping Precision-Recall plot: No non-NaN data points after cleaning true labels or probabilities.")
+        return
 
     y_true_bin = label_binarize(y_true_clean, classes=sorted_classes)
-
 
     precision = dict()
     recall = dict()
     average_precision = dict()
     for i, class_label in enumerate(sorted_classes):
-         if y_true_bin.shape[1] > i and np.any(y_true_bin[:, i] == 1):
-              if y_proba_clean.shape[1] > i:
-                   precision[i], recall[i], _ = precision_recall_curve(y_true_bin[:, i], y_proba_clean[:, i])
-                   average_precision[i] = average_precision_score(y_true_bin[:, i], y_proba_clean[:, i])
-              else:
-                   logger.warning(f"Skipping Precision-Recall calculation for class {class_label}: Probability array does not have enough columns.")
-                   precision[i], recall[i], average_precision[i] = None, None, None
-         else:
-              logger.warning(f"Skipping Precision-Recall calculation for class {class_label}: No positive samples in true labels for this class.")
-              precision[i], recall[i], average_precision[i] = None, None, None
+        if y_true_bin.shape[1] > i and np.any(y_true_bin[:, i] == 1):
+            if y_proba_clean.shape[1] > i:
+                precision[i], recall[i], _ = precision_recall_curve(y_true_bin[:, i], y_proba_clean[:, i])
+                average_precision[i] = average_precision_score(y_true_bin[:, i], y_proba_clean[:, i])
+            else:
+                logger.warning(f"Skipping Precision-Recall calculation for class {class_label}: Probability array does not have enough columns.")
+                precision[i], recall[i], average_precision[i] = None, None, None
+        else:
+            logger.warning(f"Skipping Precision-Recall calculation for class {class_label}: No positive samples in true labels for this class.")
+            precision[i], recall[i], average_precision[i] = None, None, None
 
 
     plt.figure(figsize=(8, 6))
 
     for i, class_label in enumerate(sorted_classes):
         if average_precision.get(i) is not None:
-             plt.plot(recall[i], precision[i], label=f'Precision-Recall curve of class {sorted_classes[i]} (area = {average_precision[i]:0.2f})')
+            plt.plot(recall[i], precision[i], label=f'Precision-Recall curve of class {class_label} (area = {average_precision[i]:0.2f})')
 
     plt.xlabel('Recall')
     plt.ylabel('Precision')
-    plt.title(f'Precision-Recall Curve\n{symbol.upper()} {interval} ({model_key})')
+    plt.title(f'Precision-Recall Curve\n{symbol.upper()} {interval} ({model_key.replace("_", " ").title()})')
     plt.legend(loc="lower left")
     plt.ylim([0.0, 1.05])
     plt.xlim([0.0, 1.0])
     plt.tight_layout()
 
     safe_interval = interval.replace(':', '_')
-    pr_curve_plot_path = output_dir / f"{symbol.upper()}_{safe_interval}_{model_key}_precision_recall_curve.png".replace(':', '_')
+    pr_curve_plot_path = output_dir / f"{symbol.upper()}_{safe_interval}_{model_key}_precision_recall_curve.png"
     try:
         plt.savefig(pr_curve_plot_path, dpi=150)
         logger.info(f"Saved Precision-Recall plot to {pr_curve_plot_path}")
@@ -447,26 +427,28 @@ def plot_calibration_curve(y_true: pd.Series, y_proba: np.ndarray, classes: list
         logger.warning("Skipping calibration plot: Plotting libraries not available.")
         return
     if y_true.empty or y_proba.shape[0] == 0 or y_proba.shape[1] != len(classes):
-         logger.warning("Insufficient data or incorrect shape for calibration plotting.")
-         return
+        logger.warning(f"Insufficient data or incorrect shape for calibration plotting. y_true_shape: {y_true.shape}, y_proba_shape: {y_proba.shape}, classes_len: {len(classes)}.")
+        return
     unique_true_classes = np.unique(y_true.dropna())
     if len(unique_true_classes) < 2:
-         logger.warning(f"Skipping calibration plot: Need at least two unique classes in true labels. Found: {unique_true_classes}")
-         return
+        logger.warning(f"Skipping calibration plot: Need at least two unique classes in true labels. Found: {unique_true_classes}")
+        return
 
     sorted_classes = sorted(classes)
     y_true_clean = y_true.dropna()
-    y_proba_clean = pd.DataFrame(y_proba, index=y_true.index, columns=sorted_classes).loc[y_true_clean.index].values
+    y_proba_df_temp = pd.DataFrame(y_proba, index=y_true.index, columns=sorted_classes)
+    y_proba_clean = y_proba_df_temp.loc[y_true_clean.index].values
+
 
     if y_true_clean.empty or y_proba_clean.shape[0] == 0:
-         logger.warning("Skipping calibration plot: No non-NaN data points after cleaning true labels.")
-         return
+        logger.warning("Skipping calibration plot: No non-NaN data points after cleaning true labels or probabilities.")
+        return
 
     y_true_bin = label_binarize(y_true_clean, classes=sorted_classes)
 
     plt.figure(figsize=(8, 8))
     for i, class_label in enumerate(sorted_classes):
-        if y_true_bin.shape[1] > i and np.any(y_true_bin[:, i] == 1): # Ensure there are positive samples for this class
+        if y_true_bin.shape[1] > i and np.any(y_true_bin[:, i] == 1):
             if y_proba_clean.shape[1] > i:
                 prob_true, prob_pred = calibration_curve(y_true_bin[:, i], y_proba_clean[:, i], n_bins=10)
                 plt.plot(prob_pred, prob_true, "s-", label=f"Class {class_label}")
@@ -485,7 +467,7 @@ def plot_calibration_curve(y_true: pd.Series, y_proba: np.ndarray, classes: list
     plt.tight_layout()
 
     safe_interval = interval.replace(':', '_')
-    calibration_plot_path = output_dir / f"{symbol.upper()}_{safe_interval}_{model_key}_calibration_plot.png".replace(':', '_')
+    calibration_plot_path = output_dir / f"{symbol.upper()}_{safe_interval}_{model_key}_calibration_plot.png"
     try:
         plt.savefig(calibration_plot_path, dpi=150)
         logger.info(f"Saved calibration plot to {calibration_plot_path}")
@@ -496,109 +478,65 @@ def plot_calibration_curve(y_true: pd.Series, y_proba: np.ndarray, classes: list
 
 
 @log_analysis_start_end
-def load_and_prepare_data(symbol: str, interval: str, model_key: str, train_ratio: float, data_manager: DataManager) -> Tuple[pd.DataFrame, pd.DataFrame, pd.Series, pd.Series, List[str]]:
+def load_and_prepare_data(symbol: str, interval: str, train_ratio: float, data_manager: DataManager, feature_columns_original: List[str]) -> Tuple[pd.DataFrame, pd.DataFrame, pd.Series, pd.Series]:
     """
     Loads processed and labeled data, merges them, and splits into train/test sets.
-    Handles feature selection and NaN removal.
+    Handles feature selection and NaN removal using the original features from the loaded model.
     """
     logger.info(f"Loading and preparing data for {symbol} {interval} with train_ratio={train_ratio}...")
 
     try:
-        # Load processed data (features)
-        processed_data = data_manager.load_data(
-            symbol=symbol,
-            interval=interval,
-            data_type='processed'
-        )
+        processed_data = data_manager.load_data(symbol=symbol, interval=interval, data_type='processed')
+        if processed_data is None or processed_data.empty:
+            raise ModelAnalysisError(f"Failed to load processed data for {symbol} {interval}.")
         logger.info(f"Loaded processed data. Shape: {processed_data.shape}")
 
-        # Load labeled data (labels)
-        labeled_data = data_manager.load_data(
-            symbol=symbol,
-            interval=interval,
-            data_type='labeled'
-        )
+        labeled_data = data_manager.load_data(symbol=symbol, interval=interval, data_type='labeled')
+        if labeled_data is None or labeled_data.empty:
+            raise ModelAnalysisError(f"Failed to load labeled data for {symbol} {interval}.")
         logger.info(f"Loaded labeled data. Shape: {labeled_data.shape}")
 
-        # Ensure indexes are aligned
+        if len(labeled_data.columns) > 1:
+            logger.warning(f"Labeled data file for {symbol}@{interval} contains more than one column. Assuming the first column '{labeled_data.columns[0]}' is the label.")
+            labeled_data = labeled_data[[labeled_data.columns[0]]]
+
         combined_df = pd.merge(processed_data, labeled_data, left_index=True, right_index=True, how='inner')
+        if combined_df.empty:
+            logger.error("Merged features and labels DataFrame is empty.")
+            raise ModelAnalysisError("Merged features and labels DataFrame is empty.")
         logger.info(f"Merged processed and labeled data. Combined shape: {combined_df.shape}")
 
-        # Get the list of features to use based on the model_key
-        model_config = MODEL_CONFIG.get(model_key, {})
-        # Prioritize features_to_use explicitly defined in MODEL_CONFIG
-        selected_features = model_config.get('features_to_use', [])
+        # Use the `feature_columns_original` list passed from the loaded ModelTrainer
+        selected_features = feature_columns_original
+        missing_features = [f for f in selected_features if f not in combined_df.columns]
+        if missing_features:
+            logger.critical(f"Features required by the trained model are missing from the data: {missing_features}")
+            raise ModelAnalysisError(f"Missing features in data: {missing_features}")
+        logger.info(f"Using {len(selected_features)} features as per the loaded model's configuration.")
 
-        if not selected_features:
-            logger.warning(f"No specific 'features_to_use' defined for model_key '{model_key}' in MODEL_CONFIG. Inferring features from processed data.")
-            # If no specific features are defined, assume all columns in processed_data are features
-            # EXCEPT for known non-feature columns (OHLCV, volume, open_time, label, etc.)
-            # This list should ideally be consistent with what's dropped in train_model.py's load_and_split_data
-            # Let's define a comprehensive list of columns that are *never* features
-            non_feature_columns = [
-                'open', 'high', 'low', 'close', 'volume', 'quote_asset_volume',
-                'number_of_trades', 'taker_buy_base_asset_volume', 'taker_buy_quote_asset_volume',
-                'open_time', # Explicitly exclude open_time
-                'label', # The target label itself
-                'vol_adj' # If this is a temporary column from labeling
-            ]
-            
-            # Filter out columns that are in the processed_data but are known non-features
-            selected_features = [col for col in processed_data.columns if col not in non_feature_columns]
-
-            if not selected_features:
-                logger.critical("No valid features found in processed data after excluding known non-feature columns. Please check feature generation and configuration.")
-                raise ModelAnalysisError("No features found for analysis.")
-            else:
-                logger.info(f"Inferred {len(selected_features)} features from processed data: {selected_features[:5]}... (and more)")
-        else:
-            # Ensure specified features actually exist in the DataFrame
-            missing_features = [f for f in selected_features if f not in combined_df.columns]
-            if missing_features:
-                logger.critical(f"Specified features for model '{model_key}' are missing from the data: {missing_features}")
-                raise ModelAnalysisError(f"Missing features in data: {missing_features}")
-            logger.info(f"Using specified {len(selected_features)} features for model '{model_key}'.")
-
+        label_column = labeled_data.columns[0] # Assuming label column is the first/only column in labeled_data
 
         # Drop rows with any NaN values in selected features or the label column
         initial_rows = combined_df.shape[0]
-        # Make a copy to avoid SettingWithCopyWarning if combined_df is a slice
-        df_cleaned = combined_df[selected_features + ['label']].dropna().copy()
-        rows_after_nan_drop = df_cleaned.shape[0]
-        if initial_rows - rows_after_nan_drop > 0:
-            logger.warning(f"Dropped {initial_rows - rows_after_nan_drop} rows due to NaN values in features or labels. Remaining rows: {rows_after_nan_drop}")
+        cols_to_check_for_nan = selected_features + [label_column]
+        df_cleaned = clean_data(combined_df, cols_to_check_for_nan)
 
         if df_cleaned.empty:
-            logger.critical("DataFrame is empty after dropping NaN values. Cannot proceed with analysis.")
-            raise ModelAnalysisError("Empty DataFrame after NaN removal.")
+            logger.critical("DataFrame is empty after dropping NaN/Inf values. Cannot proceed with analysis.")
+            raise ModelAnalysisError("Empty DataFrame after NaN/Inf removal.")
+        logger.info(f"Data cleaned successfully. Cleaned shape: {df_cleaned.shape}")
 
-        # Check for infinite values in features (should not be an issue with correct feature engineering)
-        for col in selected_features:
-            if np.isinf(df_cleaned[col]).any():
-                logger.critical(f"Infinite values detected in feature column: {col}. Please check feature engineering logic.")
-                # Replace inf with NaN and drop, or handle appropriately
-                df_cleaned.replace([np.inf, -np.inf], np.nan, inplace=True)
-                df_cleaned.dropna(subset=[col], inplace=True)
-                logger.warning(f"Removed rows with infinite values in {col}. Current shape: {df_cleaned.shape}")
-
-        if df_cleaned.empty:
-            logger.critical("DataFrame is empty after handling infinite values. Cannot proceed with analysis.")
-            raise ModelAnalysisError("Empty DataFrame after infinite value handling.")
-
-        # Split into features (X) and labels (y)
         X = df_cleaned[selected_features]
-        y = df_cleaned['label']
+        y = df_cleaned[label_column]
 
-        # Convert label to integer type, if it's not already
         if not pd.api.types.is_integer_dtype(y):
             y = y.astype(int)
             logger.info("Label column cast to integer type.")
 
-        # Filter out labels that are not -1, 0, or 1 if they somehow exist
         valid_labels = [-1, 0, 1]
         original_y_count = len(y)
         y = y[y.isin(valid_labels)]
-        X = X.loc[y.index] # Keep only features corresponding to valid labels
+        X = X.loc[y.index]
         if len(y) < original_y_count:
             logger.warning(f"Removed {original_y_count - len(y)} rows with invalid labels (not -1, 0, or 1). Remaining rows: {len(y)}")
 
@@ -606,21 +544,19 @@ def load_and_prepare_data(symbol: str, interval: str, model_key: str, train_rati
             logger.critical("DataFrame is empty after filtering invalid labels. Cannot proceed with analysis.")
             raise ModelAnalysisError("Empty DataFrame after label filtering.")
 
-        # Train-test split using time-series split
         n_samples = len(X)
         if n_samples < 2:
             logger.critical(f"Not enough samples ({n_samples}) to perform train-test split. Need at least 2.")
             raise ModelAnalysisError("Insufficient data for train-test split.")
 
         split_index = int(n_samples * train_ratio)
-        if split_index == 0: # Ensure at least one training sample
+        if split_index == 0:
             split_index = 1
-        if split_index == n_samples: # Ensure at least one test sample
+        if split_index == n_samples:
             split_index = n_samples - 1
-            if split_index == 0: # Handle case where n_samples is 1
-                 logger.critical(f"Not enough samples ({n_samples}) to create a test set. Adjust train_ratio or provide more data.")
-                 raise ModelAnalysisError("Insufficient data for train-test split.")
-
+            if split_index == 0:
+                logger.critical(f"Not enough samples ({n_samples}) to create a test set. Adjust train_ratio or provide more data.")
+                raise ModelAnalysisError("Insufficient data for train-test split.")
 
         X_train, X_test = X.iloc[:split_index], X.iloc[split_index:]
         y_train, y_test = y.iloc[:split_index], y.iloc[split_index:]
@@ -633,24 +569,18 @@ def load_and_prepare_data(symbol: str, interval: str, model_key: str, train_rati
         logger.info(f"X_train shape: {X_train.shape}, y_train shape: {y_train.shape}")
         logger.info(f"X_test shape: {X_test.shape}, y_test shape: {y_test.shape}")
 
-        # Check label distribution in training set for potential imbalance issues
         train_label_counts = Counter(y_train)
-        logger.info(f"Training label distribution: {train_label_counts}")
+        logger.info(f"Training label distribution:\n{train_label_counts}")
         if any(count == 0 for count in train_label_counts.values()):
-            logger.warning("One or more classes have zero samples in the training set. This might cause issues for model training.")
+            logger.warning("One or more classes have zero samples in the training set. This might affect the representativeness of your test set.")
 
-
-        # Check label distribution in test set
         test_label_counts = Counter(y_test)
-        logger.info(f"Test label distribution: {test_label_counts}")
+        logger.info(f"Test label distribution:\n{test_label_counts}")
         if any(count == 0 for count in test_label_counts.values()):
-             logger.warning("One or more classes have zero samples in the test set. Evaluation metrics might be misleading.")
+            logger.warning("One or more classes have zero samples in the test set. Evaluation metrics might be misleading.")
 
-
-        # Pass the original feature columns for consistent preprocessing/prediction
-        feature_columns_original = selected_features
-
-        return X_train, X_test, y_train, y_test, feature_columns_original
+        logger.info("Data loading and splitting complete.")
+        return X_train, X_test, y_train, y_test
 
     except Exception as e:
         logger.critical(f"Error during data loading and preparation: {e}", exc_info=True)
@@ -664,17 +594,12 @@ def load_trained_model_and_preprocessor(symbol: str, interval: str, model_key: s
     """
     logger.info(f"Loading trained ModelTrainer instance for {model_key} ({symbol} {interval})...")
     try:
-        model_config_for_trainer = MODEL_CONFIG.get(model_key, {})
-        if not model_config_for_trainer:
-            logger.error(f"Model configuration for '{model_key}' not found in MODEL_CONFIG.")
-            raise ModelAnalysisError(f"Model configuration for '{model_key}' not found.")
-
-        # Initialize ModelTrainer with the model-specific configuration
-        trainer = ModelTrainer(config=model_config_for_trainer)
-        # Call the load method with symbol, interval, and model_key
+        # Initialize ModelTrainer without explicit config initially.
+        # The .load() method will read the saved ModelConfig from the metadata.
+        trainer = ModelTrainer()
         trainer.load(symbol=symbol, interval=interval, model_key=model_key)
 
-        logger.info(f"ModelTrainer instance loaded successfully for {model_key}.")
+        logger.info(f"ModelTrainer instance for {model_key} loaded successfully.")
         return trainer
 
     except FileNotFoundError as e:
@@ -688,7 +613,7 @@ def load_trained_model_and_preprocessor(symbol: str, interval: str, model_key: s
 @log_analysis_start_end
 def evaluate_model(trainer: ModelTrainer, X_test: pd.DataFrame, y_test: pd.Series, model_key: str,
                    output_dir: Path, analysis_table_pattern: str,
-                   symbol: str, interval: str, dm: DataManager, train_ratio: float) -> Tuple[np.ndarray, pd.Series, pd.DataFrame, List[int]]: # Added return types
+                   symbol: str, interval: str, dm: DataManager, train_ratio: float) -> Tuple[np.ndarray, pd.Series, pd.DataFrame, List[int]]:
     """
     Evaluates the model's performance on the test set and saves metrics.
     Handles different model types (sklearn, LSTM) by leveraging ModelTrainer's methods.
@@ -698,18 +623,20 @@ def evaluate_model(trainer: ModelTrainer, X_test: pd.DataFrame, y_test: pd.Serie
 
     if X_test.empty or y_test.empty:
         logger.warning("Test set is empty. Skipping model evaluation.")
-        # Return empty/None values if no evaluation is performed
-        return np.array([]), pd.Series(), pd.DataFrame(), []
+        return np.array([]), pd.Series(dtype=int), pd.DataFrame(), trainer.classes.tolist() # Ensure classes are returned
 
     # Make predictions using the trainer's predict method
-    y_pred_series = None
+    y_pred_series: Optional[pd.Series] = None
     try:
         logger.info(f"Making predictions with {model_key} model...")
         y_pred_series = trainer.predict(X_test)
         if not isinstance(y_pred_series, pd.Series):
-             # If trainer.predict returns numpy array, convert to Series with correct index
+             # This case handles when trainer.predict returns a numpy array for special cases (e.g., LSTM alignment)
+             # and ensures it's converted to a Series with the correct index.
+             # However, trainer.predict is designed to return pd.Series already.
+             # This check is mostly for robustness.
              y_pred_series = pd.Series(y_pred_series, index=X_test.index, name='prediction')
-        logger.info(f"{model_key} predictions made.")
+        logger.info(f"{model_key} predictions made. Shape: {y_pred_series.shape}")
     except Exception as e:
         logger.critical(f"Error during prediction with {model_key} model: {e}", exc_info=True)
         raise ModelAnalysisError(f"Prediction failed for {model_key}.") from e
@@ -725,9 +652,9 @@ def evaluate_model(trainer: ModelTrainer, X_test: pd.DataFrame, y_test: pd.Serie
             logger.info(f"Getting probability predictions with {model_key} model...")
             y_proba_df_raw = trainer.predict_proba(X_test)
             if y_proba_df_raw is not None and not y_proba_df_raw.empty:
-                # Ensure y_proba_df has the same index as X_test
-                y_proba_df = y_proba_df_raw.reindex(X_test.index)
-                logger.info(f"{model_key} probability predictions made.")
+                # Reindex to ensure alignment and consistent length
+                y_proba_df = y_proba_df_raw.reindex(y_pred_series.index) # Align with actual predictions
+                logger.info(f"{model_key} probability predictions made. Shape: {y_proba_df.shape}")
             else:
                 logger.warning(f"trainer.predict_proba for {model_key} returned empty or None.")
         else:
@@ -738,52 +665,50 @@ def evaluate_model(trainer: ModelTrainer, X_test: pd.DataFrame, y_test: pd.Serie
 
 
     # --- Handle NaNs in Predictions Before Evaluation ---
-    nan_predictions_mask = y_pred_series.isna()
-    if nan_predictions_mask.any():
-        num_nan_predictions = nan_predictions_mask.sum()
-        logger.warning(f"Found {num_nan_predictions} NaN values in predictions.")
-        logger.warning("Removing corresponding samples from test set for evaluation.")
+    # Ensure y_pred_series and y_test are aligned on index before checking NaNs
+    # This is critical if ModelTrainer.predict returns a series with a different index subset
+    # (e.g., for LSTM where predictions start after sequence_length)
+    common_index_for_eval = y_pred_series.dropna().index.intersection(y_test.index)
+    
+    if common_index_for_eval.empty:
+        logger.warning("No common valid index between predictions and true labels after removing NaNs. Skipping evaluation.")
+        return np.array([]), pd.Series(dtype=int), pd.DataFrame(), trainer.classes.tolist()
 
-        y_test_evaluated = y_test[~nan_predictions_mask]
-        y_pred_evaluated = y_pred_series[~nan_predictions_mask]
+    y_test_evaluated = y_test.loc[common_index_for_eval]
+    y_pred_evaluated = y_pred_series.loc[common_index_for_eval]
 
-        if not y_proba_df.empty:
-            y_proba_df = y_proba_df[~nan_predictions_mask] # Filter probabilities as well
+    if not y_proba_df.empty:
+        y_proba_df = y_proba_df.loc[common_index_for_eval] # Filter probabilities as well
 
-        logger.info(f"Evaluation will be performed on {len(y_test_evaluated)} samples after removing NaNs.")
-    else:
-        y_test_evaluated = y_test
-        y_pred_evaluated = y_pred_series
-        logger.info("No NaN values found in predictions. Evaluating on the full test set.")
+    num_nan_predictions_removed = len(y_test) - len(y_test_evaluated)
+    if num_nan_predictions_removed > 0:
+        logger.warning(f"Removed {num_nan_predictions_removed} samples due to NaN predictions or index mismatch for evaluation.")
+    logger.info(f"Evaluation will be performed on {len(y_test_evaluated)} samples after alignment and NaN removal.")
 
     # Ensure y_pred_evaluated is a numpy array for sklearn metrics
     y_pred_evaluated_np = y_pred_evaluated.to_numpy()
 
-    # Determine all expected labels (e.g., [-1, 0, 1])
-    # Use trainer.classes if available, otherwise infer from data
-    all_expected_labels = trainer.classes if hasattr(trainer, 'classes') and trainer.classes is not None else sorted(list(set(y_test_evaluated.unique()).union(set(y_pred_evaluated.unique()))))
-    # FIX: Use len() to check if the list/array is empty, which is robust for both lists and numpy arrays.
-    if len(all_expected_labels) == 0: # Fallback if no unique labels are found after cleaning
+    # Determine all expected labels (e.g., [-1, 0, 1]) - should always be from trainer.classes
+    all_expected_labels = trainer.classes.tolist()
+    if not all_expected_labels: # Fallback if trainer.classes is empty somehow
         all_expected_labels = [-1, 0, 1]
-    
-    # Ensure probabilities DataFrame has columns named after the classes
+        logger.warning(f"trainer.classes was empty; falling back to default expected labels: {all_expected_labels}")
+
+    # Ensure probabilities DataFrame columns match expected labels if not empty
     if not y_proba_df.empty and y_proba_df.shape[1] == len(all_expected_labels):
         y_proba_df.columns = all_expected_labels
     elif not y_proba_df.empty:
-        logger.warning(f"Probability DataFrame has {y_proba_df.shape[1]} columns, but {len(all_expected_labels)} expected labels. Cannot assign column names reliably.")
+        logger.warning(f"Probability DataFrame has {y_proba_df.shape[1]} columns, but {len(all_expected_labels)} expected labels. Cannot assign column names reliably for plotting.")
 
 
     # --- 5. Evaluate Model ---
-    logger.info("Evaluating model performance on the test set...")
-
-    y_test_1d = column_or_1d(y_test_evaluated)
-    y_pred_1d = column_or_1d(y_pred_evaluated_np) # Use the numpy array version
+    logger.info("Evaluating model performance on the aligned test set...")
 
     try:
-        overall_accuracy = accuracy_score(y_test_1d, y_pred_1d)
-        bal_acc = balanced_accuracy_score(y_test_1d, y_pred_1d)
-        class_report = classification_report(y_test_1d, y_pred_1d, labels=all_expected_labels, output_dict=True, zero_division=0)
-        conf_matrix = confusion_matrix(y_test_1d, y_pred_1d, labels=all_expected_labels)
+        overall_accuracy = accuracy_score(y_test_evaluated, y_pred_evaluated_np)
+        bal_acc = balanced_accuracy_score(y_test_evaluated, y_pred_evaluated_np)
+        class_report = classification_report(y_test_evaluated, y_pred_evaluated_np, labels=all_expected_labels, output_dict=True, zero_division=0)
+        conf_matrix = confusion_matrix(y_test_evaluated, y_pred_evaluated_np, labels=all_expected_labels)
 
         logger.info(f"Evaluation complete.")
 
@@ -796,7 +721,7 @@ def evaluate_model(trainer: ModelTrainer, X_test: pd.DataFrame, y_test: pd.Serie
     logger.info("--- Evaluation Metrics (Test Set) ---")
     logger.info(f"Overall Accuracy: {overall_accuracy:.4f}")
     logger.info(f"Balanced Accuracy: {bal_acc:.4f}")
-    logger.info("Classification Report:\n" + classification_report(y_test_1d, y_pred_1d, labels=all_expected_labels, zero_division=0))
+    logger.info("Classification Report:\n" + classification_report(y_test_evaluated, y_pred_evaluated_np, labels=all_expected_labels, zero_division=0))
     logger.info("Confusion Matrix:\n" + str(conf_matrix))
 
 
@@ -809,7 +734,7 @@ def evaluate_model(trainer: ModelTrainer, X_test: pd.DataFrame, y_test: pd.Serie
         'evaluated_set_index_range': (str(y_test_evaluated.index.min()) if not y_test_evaluated.empty else 'N/A',
                                       str(y_test_evaluated.index.max()) if not y_test_evaluated.empty else 'N/A'),
         'evaluated_set_label_distribution': y_test_evaluated.value_counts(normalize=True).sort_index().to_dict() if not y_test_evaluated.empty else {},
-        'num_samples_removed_for_evaluation': num_nan_predictions if nan_predictions_mask.any() else 0,
+        'num_samples_removed_for_evaluation': num_nan_predictions_removed,
         'model_key': model_key,
         'symbol': symbol,
         'interval': interval,
@@ -823,26 +748,24 @@ def evaluate_model(trainer: ModelTrainer, X_test: pd.DataFrame, y_test: pd.Serie
             symbol=symbol,
             interval=interval,
             model_key=model_key,
-            artifact_type='evaluation'
+            artifact_type='evaluation' # Consistent artifact type name
         )
         logger.info(f"Evaluation results saved successfully using DataManager.")
     except Exception as e:
         logger.error(f"Error saving evaluation results using DataManager: {e}", exc_info=True)
         logger.warning("Saving evaluation results failed. Analysis plots will still be attempted.")
 
-    # Return the necessary values for plotting
     return y_pred_evaluated_np, y_test_evaluated, y_proba_df, all_expected_labels
 
 
 @log_analysis_start_end
-def analyze_feature_importance(trainer: ModelTrainer, original_feature_columns: List[str], model_key: str, output_dir: Path, analysis_table_pattern: str, analysis_plot_pattern: str, symbol: str, interval: str):
+def analyze_feature_importance(trainer: ModelTrainer, model_key: str, output_dir: Path, analysis_table_pattern: str, symbol: str, interval: str):
     """
     Analyzes and visualizes feature importance for tree-based models.
     Skips for LSTM models.
     """
     logger.info(f"Analyzing feature importance for {model_key}...")
 
-    # Feature importance is typically for tree-based models. Skip for LSTM.
     if model_key == 'lstm':
         logger.info("Skipping feature importance analysis for LSTM model as it's not directly applicable in the same way as tree-based models.")
         return
@@ -856,19 +779,16 @@ def analyze_feature_importance(trainer: ModelTrainer, original_feature_columns: 
         final_model = trainer.model
 
     if final_model is not None:
-        # Determine the feature names that the model actually received for importance calculation
-        # This should be trainer.feature_columns_processed, which accounts for PCA if enabled.
         feature_names_for_importance = trainer.feature_columns_processed
-        if feature_names_for_importance is None:
-            logger.error("trainer.feature_columns_processed is None. Cannot determine feature names for importance. Falling back to original features (may be incorrect if PCA was used).")
-            feature_names_for_importance = original_feature_columns # Fallback, but expect this to be populated
+        if feature_names_for_importance is None or not feature_names_for_importance:
+            logger.error("trainer.feature_columns_processed is None or empty. Cannot determine feature names for importance. Skipping feature importance plot.")
+            return
 
         if hasattr(final_model, 'feature_importances_'):
             importance_data = final_model.feature_importances_
         elif hasattr(final_model, 'coef_'):
             # For linear models, coefficients can indicate importance
             # For multi-class, coef_ is (n_classes, n_features)
-            # Take the sum of absolute coefficients for a simple overall importance
             importance_data = np.sum(np.abs(final_model.coef_), axis=0)
         else:
             logger.warning(f"Model type '{model_key}' does not have direct 'feature_importances_' or 'coef_' attribute. Skipping feature importance analysis.")
@@ -877,32 +797,25 @@ def analyze_feature_importance(trainer: ModelTrainer, original_feature_columns: 
         logger.warning(f"No final model found in trainer for '{model_key}'. Skipping feature importance analysis.")
         return
 
-
     if importance_data is None or len(importance_data) == 0:
-        logger.warning("No feature importance data available.")
+        logger.warning("No feature importance data available after extraction.")
         return
 
-    # Critical check for length mismatch before creating DataFrame
-    if feature_names_for_importance is None or len(importance_data) != len(feature_names_for_importance):
-        logger.error(f"CRITICAL: Mismatch in lengths for feature importance: Importance data length ({len(importance_data)}) vs Feature names length ({len(feature_names_for_importance) if feature_names_for_importance else 'None'}).")
-        logger.error("This indicates an issue with feature name tracking or PCA application. Skipping feature importance plot.")
-        return # Exit the function if lengths do not match
+    if len(importance_data) != len(feature_names_for_importance):
+        logger.error(f"CRITICAL: Mismatch in lengths for feature importance: Importance data length ({len(importance_data)}) vs Feature names length ({len(feature_names_for_importance)}). Skipping feature importance plot.")
+        return
 
-
-    # Create a DataFrame for importance
     feature_importance_df = pd.DataFrame({
-        'Feature': feature_names_for_importance, # Use the corrected feature names
+        'Feature': feature_names_for_importance,
         'Importance': importance_data
-    })
-    feature_importance_df = feature_importance_df.sort_values(by='Importance', ascending=False)
+    }).sort_values(by='Importance', ascending=False)
 
-    # Save feature importance to a CSV
     safe_interval = interval.replace(':', '_')
     importance_filepath = output_dir / analysis_table_pattern.format(
         symbol=symbol.upper(),
         interval=safe_interval,
         model_type=model_key,
-        analysis_type="feature_importance" # FIX: Changed to avoid duplication
+        analysis_type="feature_importance"
     )
 
     try:
@@ -910,28 +823,15 @@ def analyze_feature_importance(trainer: ModelTrainer, original_feature_columns: 
         feature_importance_df.to_csv(importance_filepath.with_suffix('.csv'), index=False)
         logger.info(f"Feature importance saved to {importance_filepath.with_suffix('.csv')}")
     except Exception as e:
-        logger.error(f"Error saving feature importance: {e}", exc_info=True)
+        logger.error(f"Error saving feature importance table: {e}", exc_info=True)
 
-
-    # Plot feature importance
-    plt.figure(figsize=(10, max(6, len(feature_importance_df) * 0.4))) # Adjust figure size dynamically
-    sns.barplot(x='Importance', y='Feature', data=feature_importance_df,
-                hue='Feature', # Explicitly map hue to 'Feature'
-                palette='viridis',
-                legend=False) # Remove legend if hue is used for color mapping
-
-    # Use the passed symbol, interval, model_key for the title
-    plt.title(f'Feature Importance (Top {min(20, len(feature_importance_df))})\n{symbol.upper()} {interval} ({model_key})')
-    plt.xlabel('Importance')
-    plt.ylabel('Feature')
-    plt.tight_layout()
-    importance_plot_path = output_dir / analysis_plot_pattern.format(
+    # Plot feature importance using the dedicated plotting function
+    importance_plot_path = output_dir / PATHS['analysis_plot_pattern'].format(
         symbol=symbol.upper(), interval=safe_interval, model_type=model_key,
-        analysis_type="feature_importance" # FIX: Changed to avoid duplication
+        analysis_type="feature_importance"
     )
-    plt.savefig(importance_plot_path, dpi=150)
-    plt.close()
-    logger.info(f"Saved feature importance plot to {importance_plot_path}")
+    plot_feature_importance(feature_importance_df.set_index('Feature')['Importance'].to_dict(),
+                            importance_plot_path, symbol, interval, model_key)
 
 
 def analyse_model_pipeline(symbol: str, interval: str, model_key: str, train_ratio: float):
@@ -940,18 +840,17 @@ def analyse_model_pipeline(symbol: str, interval: str, model_key: str, train_rat
     """
     logger.info(f"--- Starting Model Analysis Pipeline for {model_key} ({symbol} {interval}) ---")
     start_time = time.time()
-    current_run_time_str = datetime.now().strftime("%Y-%m-%d %H:%M:%S") # Defined here
+    current_run_time_str = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
 
-    dm = DataManager() # Initialize DataManager
+    dm = DataManager()
 
-    # Define paths for saving analysis results
     try:
         analysis_output_dir = dm.get_file_path(
             symbol=symbol,
             interval=interval,
             data_type='model_analysis',
             model_key=model_key,
-            name_suffix='_plots_temp' # Temporary suffix, actual path is parent
+            name_suffix='_plots_temp'
         ).parent
         analysis_output_dir.mkdir(parents=True, exist_ok=True)
         logger.info(f"Ensured model analysis results directory exists: {analysis_output_dir}")
@@ -959,164 +858,86 @@ def analyse_model_pipeline(symbol: str, interval: str, model_key: str, train_rat
         logger.error(f"Error ensuring model analysis output directory exists: {e}", exc_info=True)
         raise ModelAnalysisError(f"Failed to create analysis output directory: {e}")
 
-
-    try:
-        # --- 1. Load Data using the new DataManager methods ---
-        logger.info("Loading and merging features and labels data using DataManager...")
-
-        df_features = dm.load_data(symbol=symbol, interval=interval, data_type='processed')
-        if df_features is None or df_features.empty:
-            raise ModelAnalysisError(f"Failed to load processed data for {symbol} {interval}.")
-
-        df_labels = dm.load_data(symbol=symbol, interval=interval, data_type='labeled')
-        if df_labels is None or df_labels.empty:
-            raise ModelAnalysisError(f"Failed to load labeled data for {symbol} {interval}.")
-
-        if len(df_labels.columns) > 1:
-             logger.warning(f"Labeled data file for {symbol}@{interval} contains more than one column. Assuming the first column '{df_labels.columns[0]}' is the label.")
-             df_labels = df_labels[[df_labels.columns[0]]]
-
-
-        df_merged = pd.merge(df_features, df_labels, left_index=True, right_index=True, how='inner')
-
-        if df_merged.empty:
-             logger.error("Merged features and labels DataFrame is empty.")
-             raise ModelAnalysisError("Merged features and labels DataFrame is empty.")
-
-
-        logger.info(f"Successfully merged features and labels. Merged shape: {df_merged.shape}")
-
-    except FileNotFoundError as e:
-        logger.error(f"Required data file not found: {e}")
-        logger.error("Please ensure you have run the feature engineering and labeling scripts first.")
-        raise ModelAnalysisError(f"Data loading failed: {e}") from e
-    except Exception as e:
-        logger.error(f"Error loading or merging data: {e}", exc_info=True)
-        raise ModelAnalysisError(f"Data loading failed: {e}") from e
-
-
-    # --- 2. Load Trained ModelTrainer instance ---
+    # --- Load Trained ModelTrainer instance FIRST ---
     logger.info(f"Loading trained ModelTrainer instance for '{model_key}'...")
+    trainer: Optional[ModelTrainer] = None
     try:
-        # Load the ModelTrainer instance directly
         trainer = load_trained_model_and_preprocessor(symbol, interval, model_key, dm)
-
         logger.info(f"ModelTrainer instance for '{model_key}' loaded successfully.")
-
-        original_feature_columns = trainer.feature_columns_original
-
-        if original_feature_columns is None or not original_feature_columns:
-             logger.error("Original feature columns could not be loaded from the trainer metadata.")
-             raise ModelAnalysisError("Original feature columns not available after loading model.")
-
-        logger.info(f"Using original feature columns loaded from trainer instance: {original_feature_columns}")
-
-        label_column = df_labels.columns[0]
-
-
-    except FileNotFoundError as e:
-        logger.error(f"Trained model file not found by DataManager: {e}")
-        logger.error(f"Please ensure you have run the training script for {symbol}@{interval} with model '{model_key}', and that ModelTrainer saves correctly using DataManager.")
-        raise ModelAnalysisError(f"Model loading failed: {e}") from e
     except Exception as e:
-        logger.error(f"Error loading trained model using DataManager: {e}", exc_info=True)
-        raise ModelAnalysisError(f"Model loading failed: {e}") from e
+        logger.error(f"Failed to load trained ModelTrainer instance. Analysis cannot proceed. Error: {e}", exc_info=True)
+        raise
+
+    if trainer.feature_columns_original is None or not trainer.feature_columns_original:
+        logger.error("Original feature columns could not be loaded from the trainer metadata. Cannot proceed with analysis.")
+        raise ModelAnalysisError("Original feature columns not available after loading model.")
+    original_feature_columns = trainer.feature_columns_original
+    logger.info(f"Using original feature columns loaded from trainer instance: {original_feature_columns}")
 
 
-    # --- 3. Prepare Data for Analysis (Test Set) ---
+    # --- Load and Prepare Data for Analysis (Test Set) ---
     logger.info("Preparing data for analysis (test set)...")
-    columns_to_check_for_nan = original_feature_columns + [label_column]
-    df_cleaned = clean_data(df_merged, columns_to_check_for_nan)
-
-    if df_cleaned.empty:
-        logger.error("No data remaining after cleaning NaN/Inf values. Cannot perform analysis.")
-        raise ModelAnalysisError("No data remaining after cleaning.")
-
-    logger.info(f"Data cleaned successfully. Cleaned shape: {df_cleaned.shape}")
-
-    split_index = int(len(df_cleaned) * train_ratio)
-
-    if split_index >= len(df_cleaned):
-         logger.error(f"Train ratio {train_ratio} is too high. No data left for test set after split.")
-         raise ModelAnalysisError(f"Train ratio {train_ratio} is too high, test set is empty.")
-
-    df_test = df_cleaned.iloc[split_index:].copy()
-
-    if df_test.empty:
-         logger.error("Test set is empty after splitting.")
-         raise ModelAnalysisError("Test set is empty after splitting.")
-
-    X_test = df_test[original_feature_columns]
-    y_test = df_test[label_column]
-
-    logger.info(f"Test set created. Shape: {df_test.shape}")
-    logger.info(f"Test set index range: {df_test.index.min()} to {df_test.index.max()}")
-
-    if not y_test.empty:
-        logger.info("Test set label distribution:")
-        logger.info(y_test.value_counts(normalize=True).sort_index().to_string())
-    else:
-        logger.warning("Test set is empty, cannot log label distribution.")
+    try:
+        # Pass the original_feature_columns to load_and_prepare_data
+        _, X_test, _, y_test = load_and_prepare_data(
+            symbol, interval, train_ratio, dm, original_feature_columns
+        )
+    except Exception as e:
+        logger.error(f"Failed to load or prepare data for analysis. Error: {e}", exc_info=True)
+        raise
 
 
-    # --- 4. Make Predictions and Evaluate Model ---
-    # Call evaluate_model and capture its returns
+    # --- Make Predictions and Evaluate Model ---
     y_pred_evaluated_np, y_test_evaluated, y_proba_df, all_expected_labels = evaluate_model(
         trainer, X_test, y_test, model_key,
-        analysis_output_dir, PATHS['analysis_table_pattern'], # Use analysis_table_pattern
-        symbol, interval, dm, train_ratio # Pass dm and train_ratio here
+        analysis_output_dir, PATHS['analysis_table_pattern'],
+        symbol, interval, dm, train_ratio
     )
 
     if y_test_evaluated.empty:
         logger.warning("No data available for plotting after evaluation. Skipping plots.")
-        return # Exit if no data to plot
+        return
 
-
-    # --- 7. Perform Detailed Analysis and Plotting ---
+    # --- Perform Detailed Analysis and Plotting ---
     logger.info("Performing detailed analysis and plotting...")
 
     try:
-        plots_base_dir = analysis_output_dir # Already defined above
-
+        plots_base_dir = analysis_output_dir
         plots_base_dir.mkdir(parents=True, exist_ok=True)
         logger.info(f"Ensured plots directory exists: {plots_base_dir}")
 
         safe_interval = interval.replace(':', '_')
+
+        # Confusion Matrix Plot
         conf_matrix_plot_path = plots_base_dir / PATHS['analysis_plot_pattern'].format(
             symbol=symbol.upper(), interval=safe_interval, model_type=model_key, analysis_type="confusion_matrix"
         )
-        # Feature importance plot path is dynamically generated in analyze_feature_importance
-        # Proba plot path is dynamically generated in plot_probability_histograms
-        # ROC AUC plot path is dynamically generated in plot_roc_auc
-        # PR Curve plot path is dynamically generated in plot_precision_recall_curve
-        # Calibration plot path is dynamically generated in plot_calibration_curve
-
-
-        # Pass symbol, interval, model_key to the plotting function
-        # Re-calculate confusion matrix for plotting from the returned evaluated predictions
         conf_matrix_for_plot = confusion_matrix(y_test_evaluated, y_pred_evaluated_np, labels=all_expected_labels)
         plot_confusion_matrix(conf_matrix_for_plot, all_expected_labels, conf_matrix_plot_path, symbol, interval, model_key)
 
 
         # Feature Importance Plot
-        # Pass the loaded trainer instance to this function
-        analyze_feature_importance(trainer, original_feature_columns, model_key,
+        analyze_feature_importance(trainer, model_key,
                                    plots_base_dir, PATHS['analysis_table_pattern'],
-                                   PATHS['analysis_plot_pattern'], symbol, interval)
+                                   symbol, interval)
 
+        # Probability-based plots
+        if not y_proba_df.empty and y_proba_df.shape[0] > 0:
+            logger.info("Generating probability-based plots...")
+            proba_plot_path = plots_base_dir / PATHS['analysis_plot_pattern'].format(
+                symbol=symbol.upper(), interval=safe_interval, model_type=model_key, analysis_type="probability_distributions"
+            )
+            plot_probability_histograms(y_test_evaluated, y_proba_df.values, all_expected_labels, proba_plot_path, symbol, interval, model_key)
 
-        if not y_proba_df.empty: # Check if y_proba_df is not empty
-             # Pass the collected y_test_evaluated, y_proba_df.values, and all_expected_labels
-             plot_probability_histograms(y_test_evaluated, y_proba_df.values, all_expected_labels, plots_base_dir / PATHS['analysis_plot_pattern'].format(symbol=symbol.upper(), interval=safe_interval, model_type=model_key, analysis_type="probability_distributions"), symbol, interval, model_key)
-             plot_roc_auc(y_test_evaluated, y_proba_df.values, all_expected_labels, plots_base_dir, symbol, interval, model_key)
-             plot_precision_recall_curve(y_test_evaluated, y_proba_df.values, all_expected_labels, plots_base_dir, symbol, interval, model_key)
-             plot_calibration_curve(y_test_evaluated, y_proba_df.values, all_expected_labels, plots_base_dir, symbol, interval, model_key)
+            plot_roc_auc(y_test_evaluated, y_proba_df.values, all_expected_labels, plots_base_dir, symbol, interval, model_key)
+            plot_precision_recall_curve(y_test_evaluated, y_proba_df.values, all_expected_labels, plots_base_dir, symbol, interval, model_key)
+            plot_calibration_curve(y_test_evaluated, y_proba_df.values, all_expected_labels, plots_base_dir, symbol, interval, model_key)
         else:
-             logger.info(f"Skipping probability-based plots: y_proba_df is empty for model type '{model_key}'.")
+            logger.info(f"Skipping probability-based plots: No valid probability data (y_proba_df is empty or has no data) for model type '{model_key}'.")
 
 
     except Exception as e:
-         logger.error(f"Error setting up or generating plots: {e}", exc_info=True)
+        logger.error(f"Error setting up or generating plots: {e}", exc_info=True)
 
 
     end_time = time.time()
@@ -1143,29 +964,24 @@ if __name__ == "__main__":
         '--model',
         type=str,
         required=True,
-        choices=list(MODEL_CONFIG.keys()),
-        help=f"Model type to analyze. Must be one of: {list(MODEL_CONFIG.keys())}"
+        choices=['random_forest', 'xgboost', 'lstm'], # Explicitly define choices
+        help=f"Model type to analyze. Available: ['random_forest', 'xgboost', 'lstm']"
     )
     parser.add_argument(
         '--train_ratio',
         type=float,
-        default=GENERAL_CONFIG.get('train_test_split_ratio', 0.8),
-        help=f"Ratio of data used for training (0.0 to 1.0 exclusive). Default: {GENERAL_CONFIG.get('train_test_split_ratio', 0.8)}"
+        # Use app_config for default train_test_split_ratio
+        default=app_config.model.train_test_split_ratio,
+        help=f"Ratio of data used for training (0.0 to 1.0 exclusive) to determine the test set for analysis. Default: {app_config.model.train_test_split_ratio}"
     )
 
     args = parser.parse_args()
 
     if not (0 < args.train_ratio < 1):
-         logger.error(f"Invalid --train_ratio value: {args.train_ratio}. Must be between 0.0 and 1.0 (exclusive).")
-         sys.exit(1)
+        logger.error(f"Invalid --train_ratio value: {args.train_ratio}. Must be between 0.0 and 1.0 (exclusive).")
+        sys.exit(1)
 
-    model_specific_config_for_val_check = MODEL_CONFIG.get(args.model, {})
-    val_ratio_check = model_specific_config_for_val_check.get('val_ratio', 0.1)
-
-    if not (0.0 <= val_ratio_check < 1.0 and (args.train_ratio + val_ratio_check) <= 1.0):
-         logger.error(f"Invalid val_ratio value ({val_ratio_check}) or combination with train_ratio ({args.train_ratio}). Ensure 0 <= val_ratio, and train_ratio + val_ratio <= 1.")
-         sys.exit(1)
-
+    # Removed val_ratio_check as it's not relevant for analysis script which only uses train_ratio to define test set.
 
     try:
         analyse_model_pipeline(

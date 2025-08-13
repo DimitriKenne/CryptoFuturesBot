@@ -73,7 +73,7 @@ try:
     # Import the DataManager
     from utils.data_manager import DataManager
     # Import the ModelTrainer
-    from utils.model_trainer import ModelTrainer # Import the latest ModelTrainer class
+    from utils.training.model_trainer import ModelTrainer # Import the latest ModelTrainer class
 
     # Import the Backtester
     from utils.backtester import Backtester # Import the latest Backtester class
