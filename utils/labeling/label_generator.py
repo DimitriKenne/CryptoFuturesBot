@@ -4,26 +4,45 @@ import pandas as pd
 import numpy as np
 import logging
 from pathlib import Path
-from typing import Dict, Any, Optional, List, Type # Import Type for type hinting
+from typing import Dict, Any, Optional, List, Type, Union # Added Union
 import math
+import copy
+import sys
+import importlib # Import importlib for dynamic imports
 
-# --- Import Strategy Classes with new names ---
-from .labeling_strategies.base_strategy import BaseLabelingStrategy, logger # Import logger from base
-from .labeling_strategies.strategy1 import Strategy1 # Formerly triple_barrier.py
-from .labeling_strategies.strategy2 import Strategy2 # Formerly net_forward_return_quantile.py
-from .labeling_strategies.strategy3 import Strategy3 # Formerly future_range_dominance.py
-from .labeling_strategies.strategy4 import Strategy4 # Formerly swing_pivot.py
+# Add project root to Python path for imports
+PROJECT_ROOT = Path(__file__).parent.parent.parent
+sys.path.append(str(PROJECT_ROOT))
+
+# --- Import LabelConfig and DEFAULT_LABEL_CONFIG from the new schema ---
+from config.label_config_schema import LabelConfig, DEFAULT_LABEL_CONFIG
+
+# --- Import Base Strategy and its logger ---
+from utils.labeling.strategies.base_strategy import BaseLabelingStrategy, logger # Import logger from base
 
 # Define FLOAT_EPSILON here as it's used in strategies and potentially in LabelGenerator
-FLOAT_EPSILON = 1e-9
+# FLOAT_EPSILON = 1e-9
+# Import FLOAT_EPSILON from the central constants file (config.params)
+from config.params import FLOAT_EPSILON
 
-# Map label_type strings to strategy classes
-STRATEGY_MAP: Dict[str, Type[BaseLabelingStrategy]] = {
-    'strategy_1': Strategy1,
-    'strategy_2': Strategy2,
-    'strategy_3': Strategy3,
-    'strategy_4': Strategy4
-}
+# --- Dynamically Map Label Strategy Names to Strategy Classes ---
+STRATEGY_MAP: Dict[str, Type[BaseLabelingStrategy]] = {}
+for i in range(1, 5): # Adjust range if you have more strategies (e.g., 1, 10 for Strategy1 to Strategy9)
+    strategy_key = f'strategy_{i}'
+    module_path = f'utils.labeling.strategies.strategy{i}' # Corrected module path within utils.labeling
+    class_name = f'Strategy{i}'
+    try:
+        module = importlib.import_module(module_path)
+        strategy_class = getattr(module, class_name)
+        STRATEGY_MAP[strategy_key] = strategy_class
+        logger.debug(f"Dynamically loaded {class_name} for key '{strategy_key}'.")
+    except ImportError as e:
+        logger.warning(f"Could not dynamically load module '{module_path}': {e}. Skipping this strategy.")
+    except AttributeError as e:
+        logger.warning(f"Could not find class '{class_name}' in module '{module_path}': {e}. Skipping this strategy.")
+    except Exception as e:
+        logger.error(f"An unexpected error occurred while loading strategy '{strategy_key}': {e}", exc_info=True)
+
 
 class LabelGenerator:
     """
@@ -34,20 +53,45 @@ class LabelGenerator:
     Uses the centralized logging configured by the calling script.
     """
 
-    def __init__(self, config: Dict[str, Any], logger: logging.Logger):
+    def __init__(self, config: Optional[Union[LabelConfig, Dict[str, Any]]] = None, logger: Optional[logging.Logger] = None):
         """
         Initializes the LabelGenerator with configuration and selects the strategy.
 
         Args:
-            config (Dict[str, Any]): Configuration dictionary from params.py (LABELING_CONFIG).
-                                     Must contain 'label_type' and 'min_holding_period',
-                                     plus parameters relevant to the selected strategy type.
-            logger (logging.Logger): A logger instance for logging messages.
+            config (Optional[Union[LabelConfig, Dict[str, Any]]]): Configuration for labeling.
+                                               If None, defaults to a deep copy of
+                                               config.label_config_schema.DEFAULT_LABEL_CONFIG.
+                                               If a dictionary is passed, it will be
+                                               converted to a LabelConfig object.
+                                               If a LabelConfig instance is passed, it will be deep copied.
+            logger (Optional[logging.Logger]): A logger instance for logging messages.
+                                               If None, a default logger will be used.
         """
-        self.config = config
-        self.logger = logger
-        self.label_type = self.config.get('label_type')
-        self.min_holding_period = self.config.get('min_holding_period', 1) # Default to 1 if not specified
+        if logger is None:
+            self.logger = logging.getLogger(__name__)
+            if not self.logger.handlers:
+                # Add a default handler if no handlers are configured (e.g., in testing)
+                handler = logging.StreamHandler()
+                formatter = logging.Formatter('%(asctime)s - %(name)s - %(levelname)s - %(message)s')
+                handler.setFormatter(formatter)
+                self.logger.addHandler(handler)
+                self.logger.setLevel(logging.INFO)
+        else:
+            self.logger = logger
+
+        # Convert the input config to a LabelConfig dataclass instance.
+        if config is None:
+            self._label_config: LabelConfig = copy.deepcopy(DEFAULT_LABEL_CONFIG)
+        elif isinstance(config, dict):
+            # LabelConfig's __post_init__ handles nested dicts for strategies
+            self._label_config: LabelConfig = LabelConfig(**copy.deepcopy(config))
+        elif isinstance(config, LabelConfig):
+            self._label_config: LabelConfig = copy.deepcopy(config)
+        else:
+            raise TypeError("Config must be a LabelConfig instance or a dictionary, not " + str(type(config)))
+
+        self.label_type = self._label_config.label_type
+        self.min_holding_period = self._label_config.min_holding_period
 
         if self.label_type not in STRATEGY_MAP:
             raise ValueError(f"Unknown label strategy type: '{self.label_type}'. "
@@ -56,16 +100,18 @@ class LabelGenerator:
         strategy_class = STRATEGY_MAP[self.label_type]
 
         try:
-            # --- FIX: Pass only the specific strategy's configuration to its __init__ ---
-            # Get the strategy-specific parameters from the main config
-            strategy_specific_config = self.config.get(self.label_type, {})
-            # Also pass common parameters that might be needed by all strategies
-            # or for internal validation, like random_seed if it's in GENERAL_CONFIG
-            # For now, we'll just pass the specific config.
-            # If a strategy needs a global parameter (like random_seed), it should fetch it from GENERAL_CONFIG itself.
-            self.strategy: BaseLabelingStrategy = strategy_class(config=strategy_specific_config, logger=self.logger)
+            # Pass the specific strategy's configuration object (which is already a dataclass instance)
+            strategy_specific_config_obj = getattr(self._label_config, self.label_type)
+            
+            self.strategy: BaseLabelingStrategy = strategy_class(
+                config=strategy_specific_config_obj,
+                logger=self.logger,
+                # Pass common parameters from LabelConfig to the base strategy
+                trading_fee_rate=self._label_config.trading_fee_rate,
+                slippage_tolerance_pct=self._label_config.slippage_tolerance_pct
+            )
         except Exception as e:
-            self.logger.error(f"An unexpected error occurred initializing LabelGenerator: {e}")
+            self.logger.error(f"An unexpected error occurred initializing LabelGenerator for strategy '{self.label_type}': {e}", exc_info=True)
             raise # Re-raise the exception after logging
 
         self.logger.info(f"LabelGenerator initialized for '{self.label_type}' strategy.")
@@ -108,9 +154,6 @@ class LabelGenerator:
         if df_cleaned.empty:
             self.logger.error("DataFrame became empty after dropping NaNs in OHLCV data. Cannot generate labels.")
             return pd.DataFrame(index=df.index, data={'label': 0})
-
-
-        # No specific logging for TripleBarrierStrategy needed now that it's removed.
 
 
         # Calculate raw labels using the selected strategy

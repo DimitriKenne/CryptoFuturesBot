@@ -7,31 +7,34 @@ import numpy as np
 import logging
 from pathlib import Path
 from typing import Optional, Dict, Any, List
+import copy # Import copy for deepcopy
 
 # Add project root to Python path for imports
-PROJECT_ROOT = Path(__file__).parent.parent.parent
+# Adjusted PROJECT_ROOT calculation for nested folder structure (utils/feature_engineering is two levels down from project root)
+PROJECT_ROOT = Path(__file__).parent.parent.parent.parent
 sys.path.append(str(PROJECT_ROOT))
 
 # Import configuration and custom exception
 try:
-    # Import DEFAULT_FEATURE_CONFIG and schema from config/feature_config_schema
+    # Import FeatureConfig, TemporalValidationConfig, and DEFAULT_FEATURE_CONFIG (now a dataclass instance)
     from config.feature_config_schema import FeatureConfig, TemporalValidationConfig, DEFAULT_FEATURE_CONFIG
     
-    # Import TechnicalIndicatorCalculator from its new location
+    # Import TechnicalIndicatorCalculator from its location within feature_engineering
     from utils.feature_engineering.technical_indicator_calculator import TechnicalIndicatorCalculator
     
     # Assuming TemporalSafetyError is defined in a custom exceptions.py file
-    # This path remains the same as utils is still a parent directory
     from utils.exceptions import TemporalSafetyError
 except ImportError as e:
     logging.error(f"Failed to import necessary modules: {e}")
-    raise
+    raise # Re-raise the exception to stop execution if essential imports fail
 
 # Set up logger for this module
 logger = logging.getLogger(__name__)
 
 # Define FLOAT_EPSILON for robust floating-point comparisons
-FLOAT_EPSILON = 1e-9
+# FLOAT_EPSILON = 1e-9
+# Import FLOAT_EPSILON from the central constants file (config.params)
+from config.params import FLOAT_EPSILON
 
 class FeatureEngineer:
     """
@@ -42,22 +45,33 @@ class FeatureEngineer:
     Includes temporal safety checks to prevent lookahead bias.
     """
 
-    def __init__(self, config: Optional[Dict[str, Any]] = None):
+    def __init__(self, config: Optional[FeatureConfig] = None):
         """
-        Initializes the FeatureEngineer with a configuration dictionary.
-        The configuration is validated against the FeatureConfig schema.
-
+        Initializes the FeatureEngineer with a FeatureConfig object.
+        
         Args:
-            config (Optional[Dict[str, Any]]): Configuration for feature parameters.
-                                               If None, defaults to config.feature_config_schema.DEFAULT_FEATURE_CONFIG.
+            config (Optional[FeatureConfig]): Configuration for feature parameters.
+                                               If None, defaults to a deep copy of
+                                               config.feature_config_schema.DEFAULT_FEATURE_CONFIG.
+                                               If a dictionary is passed (e.g., from merging),
+                                               it will be used to instantiate FeatureConfig.
         """
         if config is None:
-            self.config: FeatureConfig = FeatureConfig(**DEFAULT_FEATURE_CONFIG.copy())
+            # Use a deep copy of the default dataclass instance
+            self.config: FeatureConfig = copy.deepcopy(DEFAULT_FEATURE_CONFIG)
+        elif isinstance(config, dict):
+            # If a dictionary is provided (e.g., from merged config),
+            # ensure nested TemporalValidationConfig is handled and then instantiate FeatureConfig
+            cfg_dict = copy.deepcopy(config)
+            if 'temporal_validation' in cfg_dict and isinstance(cfg_dict['temporal_validation'], dict):
+                cfg_dict['temporal_validation'] = TemporalValidationConfig(**cfg_dict['temporal_validation'])
+            self.config: FeatureConfig = FeatureConfig(**cfg_dict)
+        elif isinstance(config, FeatureConfig):
+            # If an FeatureConfig instance is passed, use a deep copy of it
+            self.config: FeatureConfig = copy.deepcopy(config)
         else:
-            # Ensure temporal_validation is correctly instantiated if it's a dict in the custom config
-            if isinstance(config.get('temporal_validation'), dict):
-                config['temporal_validation'] = TemporalValidationConfig(**config['temporal_validation'])
-            self.config: FeatureConfig = FeatureConfig(**config)
+            raise TypeError("Config must be a FeatureConfig instance or a dictionary, not " + str(type(config)))
+
 
         logger.info("FeatureEngineer initialized with general feature configuration.")
         logger.info(f"Temporal safety validation enabled: {self.config.temporal_validation.enabled}")
@@ -102,7 +116,7 @@ class FeatureEngineer:
             period_sizes.append(max_diff_order)
 
         max_period_size = max(period_sizes) if period_sizes else 0
-        calculated_lookback = max_period_size + 2
+        calculated_lookback = max_period_size + 2 # +1 for current bar, +1 for shift
 
         logger.debug(f"Calculated required lookback for FeatureEngineer: {calculated_lookback} bars (max_period: {max_period_size}).")
         return calculated_lookback
@@ -143,10 +157,20 @@ class FeatureEngineer:
         These are calculated based on past data to ensure temporal safety.
         """
         df_transformed = pd.DataFrame(index=df.index)
-        shifted_close = df['close'].shift(1)
+        # Shift close prices for log returns to prevent lookahead
+        # log_returns is usually based on (current / previous) or (current / future)
+        # Here we calculate log_returns of *previous* bar from its previous
+        # For current bar `t`, we use `close[t-1] / close[t-2]`
+        df_transformed['log_returns'] = np.log(df['close'].shift(1) / df['close'].shift(2))
+        
+        # Typical price of the *previous* bar
+        df_transformed['typical_price'] = (df['high'].shift(1) + df['low'].shift(1) + df['close'].shift(1)) / 3
 
-        df_transformed['log_returns'] = np.log(shifted_close / df['close'].shift(2))
-        df_transformed['typical_price'] = (df['high'].shift(1) + df['low'].shift(1) + shifted_close) / 3
+        # Add other essential price differences based on *shifted* data
+        df_transformed['mid_price'] = (df['high'].shift(1) + df['low'].shift(1)) / 2
+        df_transformed['body_range'] = df['high'].shift(1) - df['low'].shift(1)
+        df_transformed['open_close_diff'] = df['close'].shift(1) - df['open'].shift(1)
+        df_transformed['high_low_diff'] = df['high'].shift(1) - df['low'].shift(1)
 
         logger.debug("Price transformations added.")
         return df_transformed
@@ -159,6 +183,7 @@ class FeatureEngineer:
         """
         df_momentum = pd.DataFrame(index=df.index)
 
+        # Shift input data for temporal safety
         df_shifted = df[['open', 'high', 'low', 'close', 'volume']].shift(1)
         shifted_high = df_shifted['high']
         shifted_low = df_shifted['low']
@@ -168,7 +193,7 @@ class FeatureEngineer:
         for period in self.config.rsi_periods:
              df_momentum[f'rsi_{period}'] = TechnicalIndicatorCalculator.calculate_rsi(shifted_close, period)
 
-        stoch_d_period = 3
+        stoch_d_period = 3 # This is often a fixed standard for the %D line
         for period_k in self.config.stochastic_periods:
             stoch_results = TechnicalIndicatorCalculator.calculate_stochastic_oscillator(
                 high_prices=shifted_high, low_prices=shifted_low, close_prices=shifted_close,
@@ -184,7 +209,7 @@ class FeatureEngineer:
              )
              df_momentum['ao'] = ao_result
         else:
-             logger.warning(f"AO periods not correctly configured as a pair: {self.config.ao_periods}. Skipping AO feature.")
+             logger.warning(f"AO periods not correctly configured as a pair (expected 2, got {len(self.config.ao_periods)}): {self.config.ao_periods}. Skipping AO feature.")
              df_momentum['ao'] = np.nan
 
         for period in self.config.cci_periods:
@@ -233,38 +258,33 @@ class FeatureEngineer:
         """
         df_volatility = pd.DataFrame(index=df.index)
 
+        # Shift input data for temporal safety
         df_shifted = df[['high', 'low', 'close']].shift(1)
         shifted_high = df_shifted['high']
         shifted_low = df_shifted['low']
         shifted_close = df_shifted['close']
 
         for period in self.config.atr_periods:
-             if len(df) >= period:
-                  df_volatility[f'atr_{period}'] = TechnicalIndicatorCalculator.calculate_atr(
-                      high_prices=shifted_high,
-                      low_prices=shifted_low,
-                      close_prices=shifted_close,
-                      window=period
-                  )
+             # ATR needs (high, low, close) of *previous* bar, use shifted_data
+             df_volatility[f'atr_{period}'] = TechnicalIndicatorCalculator.calculate_atr(
+                 high_prices=shifted_high,
+                 low_prices=shifted_low,
+                 close_prices=shifted_close,
+                 window=period
+             )
+             # Log status of ATR calculation
+             if f'atr_{period}' in df_volatility.columns:
+                 num_nans = df_volatility[f'atr_{period}'].isnull().sum()
+                 num_zeros = (df_volatility[f'atr_{period}'] == 0).sum()
+                 logger.debug(f"ATR column 'atr_{period}' status: {num_nans} NaNs, {num_zeros} zeros out of {len(df_volatility)} rows.")
              else:
-                  logger.warning(f"DataFrame too short ({len(df)} bars) for ATR period {period}. Filling 'atr_{period}' with NaN.")
-                  df_volatility[f'atr_{period}'] = np.nan
-
-        if self.config.atr_periods:
-            for period in self.config.atr_periods:
-                atr_col_name = f'atr_{period}'
-                if atr_col_name in df_volatility.columns:
-                    num_nans = df_volatility[atr_col_name].isnull().sum()
-                    num_zeros = (df_volatility[atr_col_name] == 0).sum()
-                    logger.debug(f"ATR column '{atr_col_name}' status: {num_nans} NaNs, {num_zeros} zeros out of {len(df_volatility)} rows.")
-                else:
-                    logger.debug(f"ATR column '{atr_col_name}' was not created.")
+                 logger.debug(f"ATR column 'atr_{period}' was not created.")
 
         for period in self.config.bollinger_periods:
             bb_results = TechnicalIndicatorCalculator.calculate_bollinger_bands(shifted_close, period)
             df_volatility[f'bb_upper_{period}'] = bb_results['hband']
             df_volatility[f'bb_lower_{period}'] = bb_results['lband']
-            df_volatility[f'bb_width_{period}'] = bb_results['wband']
+            df_volatility[f'bb_width_{period}'] = bb_results['wband'] # Width is often used as a feature
 
         logger.debug("Volatility indicators added.")
         return df_volatility
@@ -277,6 +297,7 @@ class FeatureEngineer:
         """
         df_volume = pd.DataFrame(index=df.index)
 
+        # Shift input data for temporal safety
         df_shifted = df[['high', 'low', 'close', 'volume']].shift(1)
         shifted_high = df_shifted['high']
         shifted_low = df_shifted['low']
@@ -295,6 +316,7 @@ class FeatureEngineer:
                  volume=shifted_volume, window=period
              )
 
+        # Volume oscillator based on shifted volume for temporal safety
         df_volume['volume_osc'] = TechnicalIndicatorCalculator.calculate_volume_oscillator(
             volume=df['volume'].shift(1),
             short_ema_window=self.config.volume_oscillator_short_ema,
@@ -317,11 +339,17 @@ class FeatureEngineer:
             df_stats[f'z_score_{period}'] = TechnicalIndicatorCalculator.calculate_z_score(shifted_close, period)
 
         for period in self.config.adr_periods:
+            # Resample OHLCV data to daily frequency for ADR calculation, then shift for temporal safety
+            # ADR is typically calculated on daily (or higher interval) ranges
+            # Here we take the high/low of the *previous* day's aggregated data
             resampled_df = df.resample('D').agg({'high': 'max', 'low': 'min'})
             daily_adr = TechnicalIndicatorCalculator.calculate_adr(
-                high_prices=resampled_df['high'], low_prices=resampled_df['low'], window=period
-            ).shift(1)
+                high_prices=resampled_df['high'].shift(1), # Shift aggregated daily high
+                low_prices=resampled_df['low'].shift(1),  # Shift aggregated daily low
+                window=period
+            )
             
+            # Reindex back to original frequency, forward-filling to propagate daily ADR to intraday bars
             df_stats[f'adr_{period}'] = daily_adr.reindex(df.index, method='ffill')
 
         logger.debug("Statistical features added.")
@@ -331,10 +359,12 @@ class FeatureEngineer:
     def _add_custom_pattern_features(self, df: pd.DataFrame) -> pd.DataFrame:
         """
         Adds Fair Value Gap (FVG) and Candlestick Pattern detection features.
-        These are calculated based on current bar data.
+        These are calculated based on *current* bar data (no shift for pattern recognition itself,
+        as patterns are identified on the completed bar).
         """
         df_patterns_fvg = pd.DataFrame(index=df.index)
 
+        # Use current bar's OHLC for pattern detection
         current_open = df['open']
         current_high = df['high']
         current_low = df['low']
@@ -361,18 +391,25 @@ class FeatureEngineer:
                     close_prices=current_close,
                     pattern_func=pattern_map[pattern]
                 )
-                df_patterns_fvg[f'pattern_{pattern}_signal'] = pattern_values.apply(
-                    lambda x: 1 if x > 0 else (-1 if x < 0 else 0)
-                )
+                # Convert TA-Lib's 100/-100/0 output to 1/-1/0 for consistency
+                df_patterns_fvg[f'pattern_{pattern}_signal'] = np.where(pattern_values == 100, 1, np.where(pattern_values == -100, -1, 0))
             else:
-                logger.warning(f"Configured pattern '{pattern}' is not supported by the current implementation.")
+                logger.warning(f"Configured pattern '{pattern}' is not supported by the current TA-Lib implementation or not recognized. Skipping.")
 
-        bullish_fvg_at_t = (df['low'] > df['high'].shift(self.config.fvg_lookback_bars))
-        bearish_fvg_at_t = (df['high'] < df['low'].shift(self.config.fvg_lookback_bars))
+        # Fair Value Gap (FVG) - requires lookback relative to current bar
+        if self.config.fvg_lookback_bars >= 1: # For FVG(3), it's close[t-1] and close[t-2] vs current.
+                                             # fvg_lookback_bars = 1 would mean prev_candle's high/low
+            # Bullish FVG: Current candle's low > high of the candle `fvg_lookback_bars` ago
+            bullish_fvg_at_t = (df['low'] > df['high'].shift(self.config.fvg_lookback_bars))
+            # Bearish FVG: Current candle's high < low of the candle `fvg_lookback_bars` ago
+            bearish_fvg_at_t = (df['high'] < df['low'].shift(self.config.fvg_lookback_bars))
 
-        df_patterns_fvg['fvg'] = 0
-        df_patterns_fvg.loc[bullish_fvg_at_t, 'fvg'] = 1
-        df_patterns_fvg.loc[bearish_fvg_at_t, 'fvg'] = -1
+            df_patterns_fvg['fvg'] = 0 # Default to neutral
+            df_patterns_fvg.loc[bullish_fvg_at_t, 'fvg'] = 1
+            df_patterns_fvg.loc[bearish_fvg_at_t, 'fvg'] = -1
+        else:
+            logger.warning(f"FVG lookback bars ({self.config.fvg_lookback_bars}) is too small. Skipping FVG feature.")
+            df_patterns_fvg['fvg'] = 0 # Ensure column exists even if skipped
 
         logger.debug("Custom pattern features (candlestick and FVG) added.")
         return df_patterns_fvg
@@ -381,30 +418,43 @@ class FeatureEngineer:
     def _add_pivot_point_features(self, df: pd.DataFrame) -> pd.DataFrame:
         """
         Adds Standard Pivot Points and Pine Script-style Swing Pivots.
+        Standard Pivots are based on previous period's OHLC (e.g., previous day).
+        Swing Pivots are defined by local highs/lows over a specified window.
         """
         df_pivots = pd.DataFrame(index=df.index)
 
-        rule = None
+        # --- Standard Pivot Points (PP, R1/S1, R2/S2, R3/S3) ---
+        # Calculation based on the *previous* period's (e.g., previous day's) OHLC.
+        # This inherently ensures temporal safety if resampled data is shifted.
+        resample_rule = None
         if self.config.pivot_point_calculation_period == 'daily':
-            rule = 'D'
+            resample_rule = 'D'
         elif self.config.pivot_point_calculation_period == 'weekly':
-            rule = 'W'
+            resample_rule = 'W'
         elif self.config.pivot_point_calculation_period == 'monthly':
-            rule = 'M'
+            resample_rule = 'M'
         else:
-            logger.error(f"Unsupported pivot_point_calculation_period: {self.config.pivot_point_calculation_period}")
+            logger.error(f"Unsupported pivot_point_calculation_period: {self.config.pivot_point_calculation_period}. Skipping standard pivot features.")
 
-        if rule:
-            agg_ohlc = df[['open', 'high', 'low', 'close']].resample(rule).agg({
+        if resample_rule:
+            # Aggregate OHLC for the previous period
+            # Use .shift(1) on the aggregated data to get the *previous* period's OHLC
+            prev_period_ohlc = df[['open', 'high', 'low', 'close']].resample(resample_rule).agg({
                 'open': 'first',
                 'high': 'max',
                 'low': 'min',
                 'close': 'last'
-            })
-            prev_period_ohlc = agg_ohlc.shift(1)
+            }).shift(1) # Shift by 1 to get previous period
+
+            # Drop NaNs from aggregated data to avoid calculating pivots on incomplete periods
             valid_periods = prev_period_ohlc.dropna()
 
             if not valid_periods.empty:
+                # Calculate Standard Pivot Points
+                # PP = (High + Low + Close) / 3
+                # R1 = (2 * PP) - Low
+                # S1 = (2 * PP) - High
+                # ... and so on for R2/S2, R3/S3
                 pp = (valid_periods['high'] + valid_periods['low'] + valid_periods['close']) / 3
                 r1 = (2 * pp) - valid_periods['low']
                 s1 = (2 * pp) - valid_periods['high']
@@ -416,58 +466,52 @@ class FeatureEngineer:
                 temp_pivots = pd.DataFrame({
                     'pp': pp, 'r1': r1, 's1': s1, 'r2': r2, 's2': s2, 'r3': r3, 's3': s3
                 }, index=valid_periods.index)
+                
+                # Reindex back to original frequency and forward-fill values
                 df_pivots_standard = temp_pivots.reindex(df.index, method='ffill')
-                df_pivots_standard.dropna(inplace=True)
                 df_pivots = pd.concat([df_pivots, df_pivots_standard], axis=1)
                 logger.debug(f"Standard Pivot points calculated using {self.config.pivot_point_calculation_period} aggregation and {self.config.pivot_point_method} method.")
             else:
                 logger.warning(f"No valid previous period data found for {self.config.pivot_point_calculation_period} pivot point calculation. Skipping standard pivot features.")
+                # Ensure columns exist even if empty
                 for col in ['pp', 'r1', 's1', 'r2', 's2', 'r3', 's3']:
                     df_pivots[col] = np.nan
 
-        n = len(df)
-        swing_highs = pd.Series(np.nan, index=df.index)
-        swing_lows = pd.Series(np.nan, index=df.index)
-
+        # --- Swing Pivots (Pine Script style local high/low) ---
+        # These identify a bar as a swing high/low if it's the highest/lowest
+        # within 'left_bars' to its left and 'right_bars' to its right.
+        # To ensure temporal safety, these are calculated for `df.shift(1)` data
+        # and then results are mapped back to the original index.
         left_bars = self.config.swing_pivot_left_bars
         right_bars = self.config.swing_pivot_right_bars
+        
+        # Calculate on shifted data
+        df_shifted_for_swing = df[['high', 'low']].shift(1)
+        
+        n = len(df_shifted_for_swing)
+        swing_highs_temp = pd.Series(np.nan, index=df_shifted_for_swing.index)
+        swing_lows_temp = pd.Series(np.nan, index=df_shifted_for_swing.index)
 
+        # Iterate through the *shifted* DataFrame to find swing points
         for i in range(n):
             if i >= left_bars and i + right_bars < n:
-                window_highs = df['high'].iloc[i - left_bars : i + right_bars + 1]
-                if df['high'].iloc[i] == window_highs.max():
-                    is_pivot_high = True
-                    for j in range(1, left_bars + 1):
-                        if df['high'].iloc[i - j] >= df['high'].iloc[i]:
-                            is_pivot_high = False
-                            break
-                    if is_pivot_high:
-                        for j in range(1, right_bars + 1):
-                            if df['high'].iloc[i + j] >= df['high'].iloc[i]:
-                                is_pivot_high = False
-                                break
-                    if is_pivot_high:
-                        swing_highs.iloc[i] = df['high'].iloc[i]
+                # Check for Swing High on shifted high
+                window_highs = df_shifted_for_swing['high'].iloc[i - left_bars : i + right_bars + 1]
+                if df_shifted_for_swing['high'].iloc[i] == window_highs.max():
+                    swing_highs_temp.iloc[i] = df_shifted_for_swing['high'].iloc[i]
 
-                window_lows = df['low'].iloc[i - left_bars : i + right_bars + 1]
-                if df['low'].iloc[i] == window_lows.min():
-                    is_pivot_low = True
-                    for j in range(1, left_bars + 1):
-                        if df['low'].iloc[i - j] <= df['low'].iloc[i]:
-                            is_pivot_low = False
-                            break
-                    if is_pivot_low:
-                        for j in range(1, right_bars + 1):
-                            if df['low'].iloc[i + j] <= df['low'].iloc[i]:
-                                is_pivot_low = False
-                                break
-                    if is_pivot_low:
-                        swing_lows.iloc[i] = df['low'].iloc[i]
+                # Check for Swing Low on shifted low
+                window_lows = df_shifted_for_swing['low'].iloc[i - left_bars : i + right_bars + 1]
+                if df_shifted_for_swing['low'].iloc[i] == window_lows.min():
+                    swing_lows_temp.iloc[i] = df_shifted_for_swing['low'].iloc[i]
 
-        df_swing_pivots = pd.DataFrame(index=df.index)
-        df_swing_pivots['swing_high_pivot'] = swing_highs.ffill().shift(right_bars + 1)
-        df_swing_pivots['swing_low_pivot'] = swing_lows.ffill().shift(right_bars + 1)
-        df_pivots = pd.concat([df_pivots, df_swing_pivots], axis=1)
+        df_swing_pivots_temp = pd.DataFrame(index=df.index)
+        # Forward fill the identified swing points, and then shift *again*
+        # by `right_bars + 1` to ensure we are only using *past* swing pivots.
+        df_swing_pivots_temp['swing_high_pivot'] = swing_highs_temp.ffill().shift(right_bars + 1)
+        df_swing_pivots_temp['swing_low_pivot'] = swing_lows_temp.ffill().shift(right_bars + 1)
+        
+        df_pivots = pd.concat([df_pivots, df_swing_pivots_temp], axis=1)
 
         logger.debug("Pivot point features added.")
         return df_pivots
@@ -476,7 +520,7 @@ class FeatureEngineer:
     def _add_support_resistance_features(self, df: pd.DataFrame) -> pd.DataFrame:
         """
         Calculates simple support and resistance levels based on rolling highest high and lowest low.
-        These are calculated based on past data for temporal safety.
+        These are calculated based on *past* data for temporal safety.
         """
         df_sr = pd.DataFrame(index=df.index)
         
@@ -498,28 +542,37 @@ class FeatureEngineer:
         """
         Detects support/resistance breaks and wick patterns based on Pine Script logic.
         Requires 'swing_high_pivot', 'swing_low_pivot', 'volume_osc' features to be present.
+        These are calculated based on current bar's attributes vs. lagged pivot/S/R levels.
         """
         df_breaks = pd.DataFrame(index=df.index)
 
+        # Ensure necessary columns are available. These columns are expected to be generated
+        # by previous steps and present in the combined 'df' passed to this method.
         required_cols = ['swing_high_pivot', 'swing_low_pivot', 'volume_osc', 'open', 'high', 'low', 'close']
-        if not all(col in df.columns for col in required_cols):
-            logger.warning("Missing required columns for breakout features. Skipping breakout detection.")
+        missing_cols = [col for col in required_cols if col not in df.columns]
+        if missing_cols:
+            logger.warning(f"Missing required columns for breakout features: {missing_cols}. Skipping breakout detection.")
+            # Ensure the output columns exist with default values (0 for binary)
             for col in ['is_support_broken_strong_vol', 'is_resistance_broken_strong_vol',
                         'is_bull_wick_at_resistance', 'is_bear_wick_at_support']:
                 df_breaks[col] = 0
             return df_breaks
 
-        close_prev = df['close'].shift(1)
-        open_prev = df['open'].shift(1)
-        high_prev = df['high'].shift(1)
-        low_prev = df['low'].shift(1)
+        # Use current bar's OHLC and previously calculated pivot/oscillator values
+        current_open = df['open']
+        current_close = df['close']
+        current_high = df['high']
+        current_low = df['low']
 
         high_pivot = df['swing_high_pivot']
         low_pivot = df['swing_low_pivot']
         volume_osc = df['volume_osc']
 
-        is_resistance_crossover = (close_prev <= high_pivot) & (df['close'] > high_pivot)
-        is_strong_bullish_body = (df['close'] > df['open']) & ((df['close'] - df['open']) / (df['high'] - df['low'] + FLOAT_EPSILON) > 0.6)
+        # --- Resistance Breakout with Strong Volume ---
+        # Condition: Current close > previous high pivot AND previous close <= high pivot AND strong volume
+        # Adjusted logic for current candle crossing previous high pivot
+        is_resistance_crossover = (df['close'].shift(1) <= high_pivot) & (df['close'] > high_pivot)
+        is_strong_bullish_body = (current_close > current_open) & ((current_close - current_open) / (current_high - current_low + FLOAT_EPSILON) > 0.6)
 
         df_breaks['is_resistance_broken_strong_vol'] = (
             is_resistance_crossover &
@@ -527,8 +580,10 @@ class FeatureEngineer:
             (volume_osc > self.config.volume_threshold)
         ).astype(int)
 
-        is_support_crossunder = (close_prev >= low_pivot) & (df['close'] < low_pivot)
-        is_strong_bearish_body = (df['close'] < df['open']) & ((df['open'] - df['close']) / (df['high'] - df['low'] + FLOAT_EPSILON) > 0.6)
+        # --- Support Breakout with Strong Volume ---
+        # Condition: Current close < previous low pivot AND previous close >= low pivot AND strong volume
+        is_support_crossunder = (df['close'].shift(1) >= low_pivot) & (df['close'] < low_pivot)
+        is_strong_bearish_body = (current_close < current_open) & ((current_open - current_close) / (current_high - current_low + FLOAT_EPSILON) > 0.6)
 
         df_breaks['is_support_broken_strong_vol'] = (
             is_support_crossunder &
@@ -536,17 +591,26 @@ class FeatureEngineer:
             (volume_osc > self.config.volume_threshold)
         ).astype(int)
 
-        is_bull_wick_condition = (df['open'] - df['low']) > (df['close'] - df['open'])
+        # --- Bullish Wick at Resistance (e.g., rejection from resistance) ---
+        # Condition: Price touched/crossed resistance and reversed, forming a long upper wick
+        # Simplified: if current high > high_pivot AND current close is significantly below high AND long upper wick
+        # (current high - max(current_open, current_close)) > (max(current_open, current_close) - current_low)
+        is_long_upper_wick = (current_high - current_close) > (current_close - current_low) # Simple approx for upper wick prominence
         df_breaks['is_bull_wick_at_resistance'] = (
-            is_resistance_crossover &
-            is_bull_wick_condition
+            (current_high > high_pivot) & # Price went above resistance
+            (current_close < high_pivot) & # But closed below resistance
+            is_long_upper_wick # And has a long upper wick
         ).astype(int)
 
-        is_bear_wick_condition = (df['open'] - df['close']) < (df['high'] - df['open'])
+        # --- Bearish Wick at Support (e.g., bounce from support) ---
+        # Condition: Price touched/crossed support and reversed, forming a long lower wick
+        is_long_lower_wick = (current_close - current_low) > (current_high - current_close) # Simple approx for lower wick prominence
         df_breaks['is_bear_wick_at_support'] = (
-            is_support_crossunder &
-            is_bear_wick_condition
+            (current_low < low_pivot) & # Price went below support
+            (current_close > low_pivot) & # But closed above support
+            is_long_lower_wick # And has a long lower wick
         ).astype(int)
+
 
         logger.debug("Breakout and wick features added.")
         return df_breaks
@@ -556,138 +620,151 @@ class FeatureEngineer:
         """
         Creates all secondary and tertiary features from base indicators and other features.
         Ensures temporal safety for derived features.
+        These features might use the *current* values of primary indicators, as long as
+        those primary indicators themselves were generated from *past* OHLCV data.
         """
         df_derived = pd.DataFrame(index=df.index)
 
-        # Trend Strength
+        # --- Trend Strength ---
         if len(self.config.trend_strength_periods) == 2:
             short_period, long_period = self.config.trend_strength_periods
-            short_sma_col = f'sma_{short_period}'
-            long_sma_col = f'sma_{long_period}'
+            short_ema_col = f'ema_{short_period}'
+            long_ema_col = f'ema_{long_period}'
 
-            if short_sma_col not in df.columns or long_sma_col not in df.columns:
-                 logger.error(f"Base SMA features '{short_sma_col}' or '{long_sma_col}' missing for trend strength calculation.")
-                 df_derived['trend_strength'] = np.nan
+            # Check if base EMA features exist
+            if short_ema_col in df.columns and long_ema_col in df.columns:
+                long_ema_series = df[long_ema_col]
+                # Avoid division by zero by replacing 0 with NaN or a small epsilon for ratio calculation
+                safe_long_ema = long_ema_series.replace(0, np.nan) 
+                
+                # Trend strength as percentage difference between short and long EMA
+                df_derived['trend_strength'] = (df[short_ema_col] - safe_long_ema) / (safe_long_ema + FLOAT_EPSILON)
             else:
-                long_sma_t = df[long_sma_col].replace(0, np.nan)
-                df_derived['trend_strength'] = (df[short_sma_col] - long_sma_t) / long_sma_t
-        else:
-            logger.warning(f"Trend strength periods not correctly configured as a pair: {self.config.trend_strength_periods}. Skipping trend_strength feature.")
-            df_derived['trend_strength'] = np.nan
+                logger.warning(f"Base EMA features '{short_ema_col}' or '{long_ema_col}' missing for trend strength calculation. Skipping.")
+                df_derived['trend_strength'] = np.nan # Ensure column exists
 
-        # Volatility Regime (categorical)
+        else:
+            logger.warning(f"Trend strength periods not correctly configured as a pair (expected 2, got {len(self.config.trend_strength_periods)}): {self.config.trend_strength_periods}. Skipping trend_strength feature.")
+            df_derived['trend_strength'] = np.nan # Ensure column exists
+
+
+        # --- Volatility Regime (categorical) ---
+        # This uses ATR, which is derived from shifted OHLC, so it's temporally safe.
         if self.config.atr_periods:
-            atr_period_for_regime = min(self.config.atr_periods)
+            atr_period_for_regime = min(self.config.atr_periods) # Use the smallest ATR for consistency
             atr_col_name_for_regime = f'atr_{atr_period_for_regime}'
 
-            if atr_col_name_for_regime not in df.columns:
-                 logger.error(f"'{atr_col_name_for_regime}' feature missing for volatility regime calculation.")
-                 df_derived['volatility_regime'] = pd.NA
-            else:
-                atr_t = df[atr_col_name_for_regime]
-                atr_t_dropna = atr_t.dropna().copy()
-                if atr_t_dropna.shape[0] >= 3 and len(atr_t_dropna.unique()) >= 2:
+            if atr_col_name_for_regime in df.columns:
+                atr_series = df[atr_col_name_for_regime]
+                atr_series_dropna = atr_series.dropna().copy()
+                
+                if atr_series_dropna.shape[0] >= 3 and len(atr_series_dropna.unique()) >= 2:
                     try:
-                        df_derived.loc[atr_t_dropna.index, 'volatility_regime'] = pd.qcut(
-                            atr_t_dropna,
+                        # Qcut assigns labels 0, 1, 2 for low, medium, high volatility
+                        df_derived.loc[atr_series_dropna.index, 'volatility_regime'] = pd.qcut(
+                            atr_series_dropna,
                             q=3,
-                            labels=False,
-                            duplicates='drop'
+                            labels=False, # Use integer labels 0, 1, 2
+                            duplicates='drop' # Handle cases with identical quantiles
                         ).astype(pd.Int8Dtype())
                     except Exception as e:
-                        logger.warning(f"Could not compute volatility regime: {e}. Filling with NaN.", exc_info=True)
-                        df_derived['volatility_regime'] = pd.NA
+                        logger.warning(f"Could not compute volatility regime with qcut: {e}. Filling with NaN.", exc_info=True)
+                        df_derived['volatility_regime'] = pd.NA # Use pd.NA for nullable integer dtype
                 else:
-                     logger.warning("Insufficient data points or unique ATR values to compute volatility regime. Filling with NaN.")
-                     df_derived['volatility_regime'] = pd.NA
+                    logger.warning("Insufficient unique ATR values or data points to compute volatility regime. Filling with NaN.")
+                    df_derived['volatility_regime'] = pd.NA
+            else:
+                logger.warning(f"'{atr_col_name_for_regime}' feature missing for volatility regime calculation. Skipping.")
+                df_derived['volatility_regime'] = pd.NA # Ensure column exists
         else:
-            logger.warning("No ATR periods configured. Cannot compute volatility regime. Filling with NaN.")
-            df_derived['volatility_regime'] = pd.NA
+            logger.warning("No ATR periods configured. Cannot compute volatility regime. Skipping.")
+            df_derived['volatility_regime'] = pd.NA # Ensure column exists
 
-        # Pattern Clustering
+
+        # --- Pattern Clustering (Simple Sum of Binary Patterns) ---
+        # This feature combines the candlestick pattern signals into a single score.
         pattern_cols = [f"pattern_{p}_signal" for p in self.config.candlestick_patterns]
+        # Filter to only include columns that actually exist in the DataFrame
         existing_pattern_cols = [col for col in pattern_cols if col in df.columns]
 
         if not existing_pattern_cols:
              logger.warning("No configured pattern signal columns found in DataFrame for pattern clustering. Skipping feature.")
              df_derived['pattern_cluster'] = np.nan
         else:
+            # Sum the binary pattern signals. A higher positive sum indicates more bullish patterns.
             df_derived['pattern_cluster'] = df[existing_pattern_cols].sum(axis=1)
 
-        # Relative distance to Standard Pivot Points (normalized by ATR)
+
+        # --- Relative distance to Standard Pivot Points (normalized by ATR) ---
+        # And binary features for being above/below pivots
         if self.config.pivot_point_method == 'standard' and self.config.atr_periods:
             atr_period_for_norm = min(self.config.atr_periods)
             atr_col = f'atr_{atr_period_for_norm}'
 
-            if atr_col in df.columns and not df[atr_col].isnull().all() and (df[atr_col] > FLOAT_EPSILON).any():
+            # Ensure ATR column exists and is not all NaN/zero before normalization
+            if atr_col in df.columns and not df[atr_col].isnull().all() and (df[atr_col].abs() > FLOAT_EPSILON).any():
                 standard_pivot_cols = ['pp', 'r1', 's1', 'r2', 's2', 'r3', 's3']
                 for p_col in standard_pivot_cols:
                     if p_col in df.columns:
-                        df_derived[f'dist_to_{p_col}_norm'] = (df['close'] - df[p_col]) / df[atr_col]
-                        df_derived[f'is_above_{p_col}'] = (df['close'] > df[p_col]).astype(int)
-                        df_derived[f'is_below_{p_col}'] = (df['close'] < df[p_col]).astype(int)
+                        # Distance to pivot / ATR
+                        df_derived[f'dist_to_{p_col}_norm'] = (df['close'] - df[p_col]) / (df[atr_col] + FLOAT_EPSILON)
+                        # Is current close above/below pivot?
+                        df_derived[f'is_above_{p_col}'] = (df['close'] > df[p_col]).astype(pd.Int8Dtype())
+                        df_derived[f'is_below_{p_col}'] = (df['close'] < df[p_col]).astype(pd.Int8Dtype())
                     else:
                         logger.debug(f"Standard pivot point column '{p_col}' not found for relative distance calculation.")
             else:
-                logger.warning(f"ATR column '{atr_col}' not available or all NaN/zero for Standard Pivot Point normalization. Skipping normalized Standard Pivot Point distances.")
+                logger.warning(f"ATR column '{atr_col}' not available or all NaN/near-zero for Standard Pivot Point normalization. Skipping normalized Standard Pivot Point distances and binary flags.")
         else:
             logger.warning("Standard pivot points not configured or ATR not available for normalized pivot point distances. Skipping.")
 
-        # Relative distance to Swing Pivots (normalized by ATR)
+
+        # --- Relative distance to Swing Pivots (normalized by ATR) ---
+        # And binary features for being above/below swing pivots
         if self.config.atr_periods:
             atr_period_for_norm = min(self.config.atr_periods)
             atr_col = f'atr_{atr_period_for_norm}'
-            if atr_col in df.columns and not df[atr_col].isnull().all() and (df[atr_col] > FLOAT_EPSILON).any():
+            
+            # Ensure ATR and swing pivot columns exist
+            if atr_col in df.columns and not df[atr_col].isnull().all() and (df[atr_col].abs() > FLOAT_EPSILON).any():
                 if 'swing_high_pivot' in df.columns and 'swing_low_pivot' in df.columns:
-                    df_derived['dist_to_swing_high_norm'] = (df['close'] - df['swing_high_pivot']) / df[atr_col]
-                    df_derived['dist_to_swing_low_norm'] = (df['close'] - df['swing_low_pivot']) / df[atr_col]
-                    df_derived['is_above_swing_high'] = (df['close'] > df['swing_high_pivot']).astype(int)
-                    df_derived['is_below_swing_low'] = (df['close'] < df['swing_low_pivot']).astype(int)
+                    df_derived['dist_to_swing_high_norm'] = (df['close'] - df['swing_high_pivot']) / (df[atr_col] + FLOAT_EPSILON)
+                    df_derived['dist_to_swing_low_norm'] = (df['close'] - df['swing_low_pivot']) / (df[atr_col] + FLOAT_EPSILON)
+                    # Binary flags for current close relative to swing pivots
+                    df_derived['is_above_swing_high'] = (df['close'] > df['swing_high_pivot']).astype(pd.Int8Dtype())
+                    df_derived['is_below_swing_low'] = (df['close'] < df['swing_low_pivot']).astype(pd.Int8Dtype())
                 else:
-                    logger.warning("Swing pivot columns not found for relative distance calculation. Skipping.")
+                    logger.warning("Swing pivot columns ('swing_high_pivot', 'swing_low_pivot') not found for relative distance calculation. Skipping.")
             else:
-                logger.warning(f"ATR column '{atr_col}' not available or all NaN/zero for Swing Pivot normalization. Skipping normalized Swing Pivot distances.")
+                logger.warning(f"ATR column '{atr_col}' not available or all NaN/near-zero for Swing Pivot normalization. Skipping normalized Swing Pivot distances and binary flags.")
         else:
             logger.warning("ATR not available for normalized swing pivot distances. Skipping.")
 
-        # Support/Resistance Levels Normalized (This section expects base S/R levels to already exist)
+        # --- Support/Resistance Distances (raw and normalized) ---
+        # These features now explicitly use shifted close/S/R to prevent lookahead from their raw calculation
         for period in self.config.support_resistance_periods:
-            # Check for the existence of base S/R features before calculating distances
             if f'support_{period}' in df.columns and f'resistance_{period}' in df.columns:
+                # Raw distances: `close_prev - support_level` and `resistance_level - close_prev`
                 df_derived[f'dist_to_support_{period}'] = df['close'].shift(1) - df[f'support_{period}']
                 df_derived[f'dist_to_resistance_{period}'] = df[f'resistance_{period}'] - df['close'].shift(1)
-
-                num_nans_dist_sup = df_derived[f'dist_to_support_{period}'].isnull().sum()
-                num_nans_dist_res = df_derived[f'dist_to_resistance_{period}'].isnull().sum()
-                logger.debug(f"S/R Distance (Period {period}) status: dist_to_support_{period} has {num_nans_dist_sup} NaNs. dist_to_resistance_{period} has {num_nans_dist_res} NaNs.")
-                if num_nans_dist_sup < len(df_derived):
-                    logger.debug(f"Sample of dist_to_support_{period}: {df_derived[f'dist_to_support_{period}'].dropna().head().tolist()}")
-                if num_nans_dist_res < len(df_derived):
-                    logger.debug(f"Sample of dist_to_resistance_{period}: {df_derived[f'dist_to_resistance_{period}'].dropna().head().tolist()}")
 
                 if self.config.atr_periods:
                     atr_period_for_norm = min(self.config.atr_periods)
                     atr_col = f'atr_{atr_period_for_norm}'
 
-                    if atr_col in df.columns and not df[atr_col].isnull().all() and (df[atr_col] > FLOAT_EPSILON).any():
-                        combined_valid_mask_sup = (df_derived[f'dist_to_support_{period}'].notna()) & \
-                                                  (df[atr_col].notna()) & \
-                                                  (df[atr_col] > FLOAT_EPSILON)
+                    if atr_col in df.columns and not df[atr_col].isnull().all() and (df[atr_col].abs() > FLOAT_EPSILON).any():
+                        # Normalized distances: `raw_distance / ATR`
+                        # Need to handle potential NaNs from shifted data in dist_to_support/resistance
+                        valid_dist_sup = df_derived[f'dist_to_support_{period}'].notna() & df[atr_col].notna() & (df[atr_col].abs() > FLOAT_EPSILON)
+                        valid_dist_res = df_derived[f'dist_to_resistance_{period}'].notna() & df[atr_col].notna() & (df[atr_col].abs() > FLOAT_EPSILON)
 
-                        combined_valid_mask_res = (df_derived[f'dist_to_resistance_{period}'].notna()) & \
-                                                  (df[atr_col].notna()) & \
-                                                  (df[atr_col] > FLOAT_EPSILON)
-
-                        logger.debug(f"Combined normalization mask for support (Period {period}) has {combined_valid_mask_sup.sum()} True values.")
-                        logger.debug(f"Combined normalization mask for resistance (Period {period}) has {combined_valid_mask_res.sum()} True values.")
-
-                        df_derived.loc[combined_valid_mask_sup, f'dist_to_support_norm_{period}'] = \
-                            df_derived.loc[combined_valid_mask_sup, f'dist_to_support_{period}'] / df.loc[combined_valid_mask_sup, atr_col]
-
-                        df_derived.loc[combined_valid_mask_res, f'dist_to_resistance_norm_{period}'] = \
-                            df_derived.loc[combined_valid_mask_res, f'dist_to_resistance_{period}'] / df.loc[combined_valid_mask_res, atr_col]
+                        df_derived.loc[valid_dist_sup, f'dist_to_support_norm_{period}'] = \
+                            df_derived.loc[valid_dist_sup, f'dist_to_support_{period}'] / (df.loc[valid_dist_sup, atr_col] + FLOAT_EPSILON)
+                        
+                        df_derived.loc[valid_dist_res, f'dist_to_resistance_norm_{period}'] = \
+                            df_derived.loc[valid_dist_res, f'dist_to_resistance_{period}'] / (df.loc[valid_dist_res, atr_col] + FLOAT_EPSILON)
                     else:
-                        logger.warning(f"ATR column '{atr_col}' not available or all NaN/zero for S/R normalization for period {period}. Skipping normalized S/R distance.")
+                        logger.warning(f"ATR column '{atr_col}' not available or all NaN/near-zero for S/R normalization for period {period}. Skipping normalized S/R distance.")
                         df_derived[f'dist_to_support_norm_{period}'] = np.nan
                         df_derived[f'dist_to_resistance_norm_{period}'] = np.nan
                 else:
@@ -696,11 +773,11 @@ class FeatureEngineer:
                     df_derived[f'dist_to_resistance_norm_{period}'] = np.nan
             else:
                 logger.warning(f"Base S/R features 'support_{period}' or 'resistance_{period}' not found. Skipping S/R distance calculations for this period.")
+                # Ensure columns exist with NaNs if not calculated
                 df_derived[f'dist_to_support_{period}'] = np.nan
                 df_derived[f'dist_to_resistance_{period}'] = np.nan
                 df_derived[f'dist_to_support_norm_{period}'] = np.nan
                 df_derived[f'dist_to_resistance_norm_{period}'] = np.nan
-
 
         logger.debug("Derived features added.")
         return df_derived
@@ -751,39 +828,47 @@ class FeatureEngineer:
             logger.error("Cannot perform temporal safety validation: 'close' column is missing.")
             return []
 
+        # Calculate the next period's close price change, shifted for validation against current features
         next_close_change = df['close'].pct_change().shift(-1)
+        
         violating_features = []
         ohlcv_cols = {'open', 'high', 'low', 'close', 'volume'}
 
+        # Columns that are binary/categorical and thus correlation check is not directly applicable
+        # or columns that are direct outputs of current price patterns and don't need a shift.
+        # This list should be kept up-to-date with all non-numeric or current-bar-dependent features.
         cols_to_skip_correlation = [
-            col for col in ['fvg', 'volatility_regime', 'pp', 'r1', 's1', 'r2', 's2', 'r3', 's3',
-                            'swing_high_pivot', 'swing_low_pivot',
-                            'is_above_pp', 'is_below_pp', 'is_above_r1', 'is_below_r1',
-                            'is_above_s1', 'is_below_s1', 'is_above_r2', 'is_below_r2',
-                            'is_above_s2', 'is_below_s2', 'is_above_r3', 'is_below_r3',
-                            'is_above_s3',
-                            'is_above_swing_high', 'is_below_swing_low',
-                            'is_support_broken_strong_vol', 'is_resistance_broken_strong_vol',
-                            'is_bull_wick_at_resistance', 'is_bear_wick_at_support'
-                           ]
-            if col in df.columns and not pd.api.types.is_numeric_dtype(df[col])
+            'fvg', 'volatility_regime', 'pattern_cluster',
+            'pp', 'r1', 's1', 'r2', 's2', 'r3', 's3', # Standard pivot levels
+            'swing_high_pivot', 'swing_low_pivot', # Swing pivot levels
+            # Binary flags related to pivots/SR/breaks - these are already based on current vs past levels
+            'is_above_pp', 'is_below_pp', 'is_above_r1', 'is_below_r1',
+            'is_above_s1', 'is_below_s1', 'is_above_r2', 'is_below_r2',
+            'is_above_s2', 'is_below_s2', 'is_above_r3', 'is_below_r3',
+            'is_above_s3', 'is_below_s3', # Added missing _s3
+            'is_above_swing_high', 'is_below_swing_low',
+            'is_support_broken_strong_vol', 'is_resistance_broken_strong_vol',
+            'is_bull_wick_at_resistance', 'is_bear_wick_at_support'
         ]
-
-        feature_cols = [col for col in df.columns if col not in ohlcv_cols and col != next_close_change.name and col not in cols_to_skip_correlation]
+        
+        # Filter features to check for correlation: only numeric features not in OHLCV and not in skip list
+        feature_cols = [col for col in df.columns 
+                        if col not in ohlcv_cols and 
+                           col != next_close_change.name and 
+                           col not in cols_to_skip_correlation and
+                           pd.api.types.is_numeric_dtype(df[col])]
 
         for col in feature_cols:
-            if not pd.api.types.is_numeric_dtype(df[col]):
-                logger.debug(f"Skipping temporal safety correlation check for non-numeric column '{col}'.")
-                continue
-
             x = df[col]
             y = next_close_change
+            
+            # Drop NaN values for accurate correlation calculation
             valid = pd.notna(x) & pd.notna(y)
             x_valid = x[valid]
             y_valid = y[valid]
 
-            if len(x_valid) < 2 or x_valid.std() < 1e-9 or y_valid.std() < 1e-9:
-                logger.debug(f"Skipping temporal validation for {col}: Insufficient valid data points ({len(x_valid)}) or near-zero standard deviation.")
+            if len(x_valid) < 2 or x_valid.std() < FLOAT_EPSILON or y_valid.std() < FLOAT_EPSILON:
+                logger.debug(f"Skipping temporal validation for {col}: Insufficient valid data points ({len(x_valid)}) or near-zero standard deviation after filtering NaNs.")
                 continue
 
             try:
@@ -812,43 +897,48 @@ class FeatureEngineer:
         """
         logger.info("Starting general feature engineering process.")
         self._validate_dataframe(df)
+        
+        # Ensure that we are working with a fresh copy to avoid side effects
         df_processed = df.copy()
 
+        # Generate base features that use shifted data to ensure temporal safety
+        # These methods are designed to produce features for the current bar based on past information
         df_price_transforms = self._add_price_transformations(df)
-        df_processed = pd.concat([df_processed, df_price_transforms], axis=1)
-
         df_momentum = self._add_momentum_indicators(df)
-        df_processed = pd.concat([df_processed, df_momentum], axis=1)
-
         df_trend = self._add_trend_indicators(df)
-        df_processed = pd.concat([df_processed, df_trend], axis=1)
-
         df_volatility = self._add_volatility_indicators(df)
-        df_processed = pd.concat([df_processed, df_volatility], axis=1)
-
         df_volume = self._add_volume_indicators(df)
-        df_processed = pd.concat([df_processed, df_volume], axis=1)
-
         df_stats = self._add_statistical_features(df)
-        df_processed = pd.concat([df_processed, df_stats], axis=1)
-
-        df_custom_patterns = self._add_custom_pattern_features(df)
-        df_processed = pd.concat([df_processed, df_custom_patterns], axis=1)
-
+        # Candlestick patterns and FVG are based on the current completed bar, not future.
+        df_custom_patterns = self._add_custom_pattern_features(df) 
         df_pivots = self._add_pivot_point_features(df)
-        df_processed = pd.concat([df_processed, df_pivots], axis=1)
+        df_sr = self._add_support_resistance_features(df) # Add Support/Resistance before derived features that might use it
 
-        # NEW: Add Support/Resistance features before derived features
-        df_sr = self._add_support_resistance_features(df)
-        df_processed = pd.concat([df_processed, df_sr], axis=1)
+        # Concatenate all base features. The NaNs due to shifting are expected here.
+        df_processed = pd.concat([
+            df_processed,
+            df_price_transforms,
+            df_momentum,
+            df_trend,
+            df_volatility,
+            df_volume,
+            df_stats,
+            df_custom_patterns,
+            df_pivots,
+            df_sr
+        ], axis=1)
 
-
-        df_derived = self._add_all_derived_features(df_processed)
+        # Derived features can now use the columns generated above.
+        # Ensure they also handle temporal safety by deriving from already temporally safe features.
+        df_derived = self._add_all_derived_features(df_processed) # Pass df_processed which contains all prior features
         df_processed = pd.concat([df_processed, df_derived], axis=1)
 
-        df_breaks = self._add_breakout_features(df_processed)
+        # Breakout features also use already generated features
+        df_breaks = self._add_breakout_features(df_processed) # Pass df_processed
         df_processed = pd.concat([df_processed, df_breaks], axis=1)
 
+        # Lagged and Differenced features are applied to the *already generated* features
+        # They will introduce further NaNs at the beginning based on their shift periods.
         df_lagged = self._add_lagged_features(df_processed)
         df_processed = pd.concat([df_processed, df_lagged], axis=1)
 
@@ -857,7 +947,9 @@ class FeatureEngineer:
 
         df_with_nan = df_processed.copy()
 
-        categorical_cols = ['fvg', 'volatility_regime']
+        # Convert appropriate columns to nullable integer types (for binary/categorical features)
+        categorical_cols = ['fvg', 'volatility_regime', 'pattern_cluster'] # pattern_cluster is now sum, can be int/float
+        
         standard_pivot_binary_cols = []
         for p_col in ['pp', 'r1', 's1', 'r2', 's2', 'r3', 's3']:
             standard_pivot_binary_cols.append(f'is_above_{p_col}')
@@ -873,12 +965,18 @@ class FeatureEngineer:
 
         for col in categorical_cols:
              if col in df_with_nan.columns:
-                  df_with_nan.loc[:, col] = df_with_nan[col].astype(pd.Int8Dtype())
+                  # Ensure conversion only for columns that are actually binary (0, 1, -1)
+                  # and are not already float-based sums (like pattern_cluster)
+                  if df_with_nan[col].dropna().isin([0, 1, -1]).all(): # Check if values are binary/ternary
+                    df_with_nan.loc[:, col] = df_with_nan[col].astype(pd.Int8Dtype())
+                  else:
+                    logger.debug(f"Column '{col}' contains values outside of [0, 1, -1] or NaNs. Not casting to Int8Dtype.")
              else:
                   logger.debug(f"Categorical column '{col}' not found in DataFrame to cast type.")
 
         logger.info(f"General feature engineering complete. DataFrame shape (including NaNs): {df_with_nan.shape}")
 
+        # Conditionally perform temporal safety validation
         if self.config.temporal_validation.enabled:
             logger.info("Performing temporal safety validation on general features...")
             violating_features = self._validate_temporal_safety(df_with_nan)
@@ -892,3 +990,4 @@ class FeatureEngineer:
             logger.info("Temporal safety validation skipped as per configuration.")
 
         return df_with_nan
+

@@ -13,7 +13,7 @@ Requires labeled data (output of create_labels.py) and corresponding processed
 data (input to create_labels.py) which must contain OHLCV data and features
 like 'volatility_regime'.
 
-Uses configuration from config/paths.py and config/params.py.
+Uses configuration from config/paths.py, config/params.py, and config/label_config_schema.py.
 Configures logging using utils/logger_config.py (assumed to exist).
 """
 
@@ -27,6 +27,7 @@ import matplotlib.pyplot as plt
 import seaborn as sns
 from typing import Dict, Any, Optional, Tuple, List
 from dotenv import load_dotenv # Import load_dotenv
+import copy # Import copy for deepcopy
 
 # --- Load Environment Variables ---
 load_dotenv()
@@ -38,11 +39,15 @@ sys.path.insert(0, str(PROJECT_ROOT))
 # Import configuration and utilities
 try:
     from config.paths import PATHS
-    from config.params import STRATEGY_CONFIG, LABELING_CONFIG # Import LABELING_CONFIG for fee/slippage
+    # Import StrategyConfig and its DEFAULT_STRATEGY_CONFIG instance
+    from config.strategy_config_schema import StrategyConfig, DEFAULT_STRATEGY_CONFIG
+    # Import LabelConfig and its DEFAULT_LABEL_CONFIG instance
+    from config.label_config_schema import LabelConfig, DEFAULT_LABEL_CONFIG, Strategy1Config, Strategy2Config, Strategy3Config, Strategy4Config
+
     from utils.data_manager import DataManager
-    from utils.label_analyzer import LabelAnalyzer # Import LabelAnalyzer
+    from utils.labeling.label_analyzer import LabelAnalyzer # Import LabelAnalyzer
     from utils.logger_config import setup_rotating_logging
-    from utils.label_generator import LabelGenerator # Import LabelGenerator to get available strategies
+    from utils.labeling.label_generator import LabelGenerator # Import LabelGenerator to get available strategies
 
 except ImportError as e:
     print(f"CRITICAL ERROR: Failed to import necessary modules. "
@@ -82,7 +87,24 @@ def analyze_labels_pipeline(symbol: str, interval: str, label_strategy: str, fut
 
     dm = DataManager()
 
-    # --- 1. Load Data ---
+    # --- 1. Load Configuration ---
+    # Start with a deep copy of the default LabelConfig dataclass instance
+    label_config = copy.deepcopy(DEFAULT_LABEL_CONFIG)
+    # Start with a deep copy of the default StrategyConfig dataclass instance (to get analysis horizons)
+    strategy_config = copy.deepcopy(DEFAULT_STRATEGY_CONFIG)
+    
+    # Apply command-line override for label_type (for analysis naming consistency)
+    label_config.label_type = label_strategy
+
+    # Apply common parameters from StrategyConfig to label_config
+    label_config.trading_fee_rate = strategy_config.trading_fee_rate
+    label_config.slippage_tolerance_pct = strategy_config.slippage_tolerance_pct
+
+    logger.info(f"Label analysis will use configuration: {label_config}")
+    logger.info(f"Label analysis will use strategy configuration (for analysis horizons): {strategy_config}")
+
+
+    # --- 2. Load Data ---
     logger.info(f"Loading processed data for {symbol} {interval}...")
     try:
         df_processed = dm.load_data(symbol=symbol, interval=interval, data_type='processed')
@@ -95,8 +117,7 @@ def analyze_labels_pipeline(symbol: str, interval: str, label_strategy: str, fut
 
     logger.info(f"Loading labeled data for {symbol} {interval} with strategy '{label_strategy}'...")
     try:
-        # User requested to load labeled data WITHOUT strategy-specific suffix
-        df_labeled = dm.load_data(symbol=symbol, interval=interval, data_type='labeled') # REMOVED name_suffix
+        df_labeled = dm.load_data(symbol=symbol, interval=interval, data_type='labeled')
         if df_labeled is None or df_labeled.empty:
             raise FileNotFoundError(f"Labeled data not found or is empty for {symbol} {interval}.")
         logger.info(f"Successfully loaded labeled data. Shape: {df_labeled.shape}")
@@ -104,33 +125,23 @@ def analyze_labels_pipeline(symbol: str, interval: str, label_strategy: str, fut
         logger.error(f"An error occurred during labeled data loading: {e}", exc_info=True)
         sys.exit(1)
 
-    # --- 2. Combine DataFrames ---
+    # --- 3. Combine DataFrames ---
     logger.info("Combining processed and labeled data...")
     try:
-        # Ensure 'label' column is present in df_labeled
         if 'label' not in df_labeled.columns:
             raise ValueError("Labeled DataFrame must contain a 'label' column.")
 
-        # Reindex df_labeled to ensure it aligns perfectly with df_processed's index
-        # This handles cases where some labels might have been dropped during generation
-        # and ensures the combined DataFrame has the same index as the processed data.
         df_labeled_aligned = df_labeled.reindex(df_processed.index)
-
-        # Ensure label column is numeric (Int8Dtype handles pd.NA)
         df_labeled_aligned['label'] = df_labeled_aligned['label'].astype(pd.Int8Dtype())
 
-        # Merge df_processed (all features) and df_labeled_aligned (only 'label' column)
-        # Use a left join to keep all rows from df_processed, filling NaNs in 'label' if any
         df_combined = pd.merge(
             df_processed,
-            df_labeled_aligned[['label']], # Select only the 'label' column from the aligned df
+            df_labeled_aligned[['label']],
             left_index=True,
             right_index=True,
             how='left'
         )
 
-        # Fill any NaNs in the 'label' column that might result from the merge (e.g., if df_labeled was shorter)
-        # with a neutral label (0). This is crucial for consistent analysis.
         initial_label_nans = df_combined['label'].isna().sum()
         if initial_label_nans > 0:
             logger.warning(f"Found {initial_label_nans} NaN values in 'label' column after combining. Filling with 0 (neutral).")
@@ -144,56 +155,25 @@ def analyze_labels_pipeline(symbol: str, interval: str, label_strategy: str, fut
         logger.error(f"An error occurred during data combination: {e}", exc_info=True)
         sys.exit(1)
 
-    # --- 3. Initialize LabelAnalyzer and Perform Analyses ---
+    # --- 4. Initialize LabelAnalyzer and Perform Analyses ---
     logger.info("Initializing LabelAnalyzer...")
     try:
-        # Determine which fee/slippage to use based on the active labeling strategy
-        # This logic should mirror how the labeling strategy itself gets its fees
-        fee_param = 0.0
-        slippage_param = 0.0
-        f_window_param = 0 # Default, will be set below
-
-        # Get f_window from LABELING_CONFIG for the specific strategy
-        # This ensures the analyzer uses the same f_window as the label generator
-        # Use the new strategy names for conditional logic
-        if label_strategy == 'strategy_2': # Corresponds to NetForwardReturnQuantileStrategy
-            fee_param = LABELING_CONFIG.get('fee', 0.0)
-            slippage_param = LABELING_CONFIG.get('slippage', 0.0)
-            f_window_param = LABELING_CONFIG.get('f_window', 150)
-        elif label_strategy == 'strategy_3': # Corresponds to FutureRangeDominanceStrategy
-            fee_param = LABELING_CONFIG.get('fee_range', 0.0)
-            slippage_param = LABELING_CONFIG.get('slippage_range', 0.0)
-            f_window_param = LABELING_CONFIG.get('f_window_range', 40)
-        elif label_strategy == 'strategy_1': # Corresponds to TripleBarrierStrategy
-            # Triple barrier doesn't have explicit 'fee'/'slippage' in its direct config
-            # but relies on the overall trading_fee_rate/slippage_tolerance_pct from STRATEGY_CONFIG
-            fee_param = STRATEGY_CONFIG.get('trading_fee_rate', 0.0)
-            slippage_param = STRATEGY_CONFIG.get('slippage_tolerance_pct', 0.0)
-            f_window_param = LABELING_CONFIG.get('max_holding_bars', 100) # Use max_holding_bars as f_window
-        # Add conditions for 'strategy_4' and any new strategies here
-        # elif label_strategy == 'strategy_4':
-        #     fee_param = LABELING_CONFIG.get('fee', 0.0)
-        #     slippage_param = STRATEGY_CONFIG.get('slippage_tolerance_pct', 0.0)
-        #     f_window_param = LABELING_CONFIG.get('f_window', 100)
-
-
-        # Fallback if f_window_param is still 0 (not set by specific strategy logic)
-        if f_window_param == 0:
-            # Use the first value from analysis_future_horizons as a reasonable default for f_window
-            # This is a heuristic, ideally each labeling strategy config should define its primary f_window
-            f_window_param = STRATEGY_CONFIG.get('analysis_future_horizons', [150])[0]
-            logger.warning(f"Could not determine specific f_window for strategy '{label_strategy}'. Using default from analysis_future_horizons: {f_window_param}")
-
+        # Use values directly from the configured label_config instance for LabelAnalyzer
+        fee_param = label_config.trading_fee_rate
+        slippage_param = label_config.slippage_tolerance_pct
+        
+        # Get f_window from the specific strategy config within label_config
+        strategy_config_obj = getattr(label_config, label_config.label_type)
+        f_window_param = getattr(strategy_config_obj, 'future_return_window', 150) # Use a reasonable default
 
         analyzer = LabelAnalyzer(paths=PATHS, logger=logger, fee=fee_param, slippage=slippage_param, f_window=f_window_param)
         logger.info(f"Performing all analyses for {symbol} {interval} with strategy '{label_strategy}'...")
 
-        # Pass the combined DataFrame to the analyzer
         analyzer.perform_all_analyses(
             df_combined=df_combined,
             symbol=symbol,
             interval=interval,
-            label_strategy=label_strategy, # This is used for creating analysis output folders
+            label_strategy=label_strategy,
             future_horizons=future_horizons
         )
         logger.info("All selected analyses completed.")
@@ -233,7 +213,7 @@ if __name__ == "__main__":
         '--future-horizons',
         type=int,
         nargs='*', # 0 or more arguments
-        default=STRATEGY_CONFIG.get('analysis_future_horizons', [5, 10, 20, 50, 100, 150, 200]), # Default from config
+        default=DEFAULT_STRATEGY_CONFIG.analysis_future_horizons, # Default from StrategyConfig
         help='List of future bars (integers) to analyze returns over. E.g., --future-horizons 10 30 60. Defaults to config setting.'
     )
 

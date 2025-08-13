@@ -3,7 +3,7 @@
 Script to generate trading labels from processed data (including features)
 using the refactored LabelGenerator and strategy pattern.
 
-Supports multiple labeling strategies ('directional_ternary', 'triple_barrier', 'max_return_quantile')
+Supports multiple labeling strategies ('strategy_1', 'strategy_2', etc.)
 selectable via command-line argument.
 
 Loads processed data (which should include OHLCV and necessary indicators like ATR),
@@ -11,7 +11,7 @@ generates labels (1, -1, or 0) based on the chosen strategy and configuration,
 saves labeled data (only the 'label' column), and performs basic analysis
 of the label distribution, saved to a dedicated folder.
 
-Uses configuration from config/params.py and config/paths.py.
+Uses configuration from config/label_config_schema.py, config/params.py and config/paths.py.
 Configures logging using utils/logger_config.py.
 """
 
@@ -25,9 +25,6 @@ from dotenv import load_dotenv # Import load_dotenv
 from typing import Dict, Any, Optional # Import Dict, Any, Optional
 
 # --- Load Environment Variables ---
-# This should be one of the first things your script does.
-# It looks for a .env file in the current directory or parent directories
-# and loads the key-value pairs into the environment.
 load_dotenv()
 
 # Add project root to Python path
@@ -37,14 +34,16 @@ sys.path.insert(0, str(PROJECT_ROOT))
 # Import configuration and utilities
 try:
     from config.paths import PATHS
-    from config.params import LABELING_CONFIG, STRATEGY_CONFIG # Import STRATEGY_CONFIG for volatility_regime_filter_enabled
+    # Import StrategyConfig and its DEFAULT_STRATEGY_CONFIG instance
+    from config.strategy_config_schema import StrategyConfig, DEFAULT_STRATEGY_CONFIG
+    # Import LabelConfig and its DEFAULT_LABEL_CONFIG instance
+    from config.label_config_schema import LabelConfig, DEFAULT_LABEL_CONFIG, Strategy1Config, Strategy2Config, Strategy3Config, Strategy4Config
 
     from utils.data_manager import DataManager
-    from utils.label_generator import LabelGenerator
-    from utils.label_analyzer import LabelAnalyzer # NEW: Import LabelAnalyzer
+    from utils.labeling.label_generator import LabelGenerator # Updated import path
+    from utils.labeling.label_analyzer import LabelAnalyzer # Updated import path
     from utils.logger_config import setup_rotating_logging
-    # Import specific strategy for type checking (now using generic names)
-    from utils.labeling_strategies.strategy1 import Strategy1 # Import as Strategy1 for type checking
+    # No need to import specific strategy for type checking here, as LabelConfig is the source of truth
 
 except ImportError as e:
     print(f"CRITICAL ERROR: Failed to import necessary modules. "
@@ -82,25 +81,28 @@ def create_labels_pipeline(symbol: str, interval: str, label_strategy: str):
     logger.info(f"Starting labeling pipeline for {symbol} {interval} using '{label_strategy}' strategy...")
 
     # --- 1. Load Configuration ---
-    # Create a deep copy of LABELING_CONFIG to avoid modifying the original
-    labeling_config = copy.deepcopy(LABELING_CONFIG)
-    labeling_config['label_type'] = label_strategy
+    # Start with a deep copy of the default LabelConfig dataclass instance
+    label_config = copy.deepcopy(DEFAULT_LABEL_CONFIG)
+    # Start with a deep copy of the default StrategyConfig dataclass instance (to get overrides)
+    strategy_config = copy.deepcopy(DEFAULT_STRATEGY_CONFIG)
 
-    # Merge volatility regime filter parameters if enabled
-    if STRATEGY_CONFIG.get('volatility_regime_filter_enabled', False):
-        labeling_config['volatility_regime_max_holding_bars'] = STRATEGY_CONFIG.get('volatility_regime_max_holding_bars')
-        labeling_config['allow_trading_in_volatility_regime'] = STRATEGY_CONFIG.get('allow_trading_in_volatility_regime')
-        logger.info("Volatility regime filter parameters merged into labeling config.")
+    # Apply command-line override for label_type
+    label_config.label_type = label_strategy
 
-    logger.info(f"Using labeling configuration: {labeling_config}")
+    # Apply common parameters from StrategyConfig to label_config
+    label_config.trading_fee_rate = strategy_config.trading_fee_rate
+    label_config.slippage_tolerance_pct = strategy_config.slippage_tolerance_pct
+
+    logger.info(f"Using labeling configuration: {label_config}")
+    logger.info(f"Using strategy configuration (for common parameters): {strategy_config}")
 
     # --- 2. Initialize DataManager and LabelGenerator ---
     dm = DataManager()
     try:
-        # Pass the logger instance to LabelGenerator
-        gen = LabelGenerator(config=labeling_config, logger=logger)
+        # Pass the configured LabelConfig instance directly to LabelGenerator
+        gen = LabelGenerator(config=label_config, logger=logger)
     except Exception as e:
-        logger.error(f"An unexpected error occurred initializing LabelGenerator: {e}")
+        logger.error(f"An unexpected error occurred initializing LabelGenerator: {e}", exc_info=True)
         sys.exit(1)
 
 
@@ -138,59 +140,45 @@ def create_labels_pipeline(symbol: str, interval: str, label_strategy: str):
     try:
         logger.info(f"Calculating labels using '{label_strategy}' strategy...")
         # Pass a copy to avoid unintended modifications within the LabelGenerator
-        # The returned full_labeled_df should have the correct index from df_input
-        # This full_labeled_df will only contain the 'label' column and the index.
         full_labeled_df_labels_only = gen.calculate_labels(df_input.copy())
         logger.info(f"Successfully generated labels. Labeled DataFrame (labels only) shape: {full_labeled_df_labels_only.shape}")
+        
         # --- Print Calculated TP/SL Percentages (if Strategy 1) ---
-        if isinstance(gen.strategy, Strategy1): # Check against Strategy1
-            logger.info(f"\n--- Calculated Strategy 1 Parameters for {symbol} {interval} ---")
-            logger.info(f"  Long TP (Net): {gen.strategy.long_tp_net_pct:.4f}%")
-            logger.info(f"  Long SL (Net): {gen.strategy.long_sl_net_pct:.4f}%")
-            logger.info(f"  Short TP (Net): {gen.strategy.short_tp_net_pct:.4f}%")
-            logger.info(f"  Short SL (Net): {gen.strategy.short_sl_net_pct:.4f}%")
-            logger.info(f"  Long TP (Gross Price Move): {gen.strategy.long_tp_gross_pct:.4f}%")
-            logger.info(f"  Long SL (Gross Price Move): {gen.strategy.long_sl_gross_pct:.4f}%")
-            logger.info(f"  Short TP (Gross Price Move): {gen.strategy.short_tp_gross_pct:.4f}%")
-            logger.info(f"  Short SL (Gross Price Move): {gen.strategy.short_sl_gross_pct:.4f}%")
-            logger.info(f"  Max Holding Bars: {gen.strategy.max_holding_bars}")
-            logger.info(f"  TP Quantile Percentile: {gen.strategy.tp_quantile_pct}%")
-            logger.info(f"  Risk-Reward Ratio: {gen.strategy.rr_ratio}")
-            logger.info(f"  Fee Range: {gen.strategy.fee_range}")
-            logger.info(f"  Slippage Range: {gen.strategy.slippage_range}")
+        # Access the strategy-specific config directly from the LabelGenerator's internal config
+        if label_config.label_type == 'strategy_1': # Check against strategy type
+            strategy_1_config: Strategy1Config = label_config.strategy_1
+            logger.info(f"\n--- Strategy 1 (Triple Barrier) Parameters for {symbol} {interval} ---")
+            logger.info(f"  Profit Multiplier: {strategy_1_config.profit_multiplier}")
+            logger.info(f"  Stop Loss Multiplier: {strategy_1_config.stop_loss_multiplier}")
+            logger.info(f"  Future Return Window: {strategy_1_config.future_return_window} bars")
+            logger.info(f"  Volatility Adjustment Lookback (ATR): {strategy_1_config.vol_adj_lookback} bars")
             logger.info(f"----------------------------------------------------\n")
 
-
     except ValueError as e:
-        logger.critical(f"Error during label generation: {e}")
+        logger.critical(f"Error during label generation: {e}", exc_info=True)
         sys.exit(1)
     except Exception as e:
         logger.critical(f"An unexpected error occurred during labeling: {e}", exc_info=True)
         sys.exit(1)
 
     # --- 5. Prepare Combined DataFrame for Analysis and Saving ---
-    # CRITICAL FIX: Merge df_input (with all OHLCV and features) with the generated labels
-    # to create a comprehensive DataFrame for analysis.
     if 'label' not in full_labeled_df_labels_only.columns:
         logger.critical("Label column not found in generated labels. Cannot proceed.")
         sys.exit(1)
 
-    # Ensure the label column has the correct index and name
     labeled_data_to_save = pd.DataFrame(
         {'label': full_labeled_df_labels_only['label']},
-        index=df_input.index # Use the index from the original processed data
+        index=df_input.index
     )
-    # Reindex one more time to ensure perfect alignment and fill NaNs if any labels were dropped
+    # Ensure all original rows are present, filling NaNs (e.g., from initial lookback) with 0
     labeled_data_to_save = labeled_data_to_save.reindex(df_input.index, fill_value=0)
 
-    # Merge df_input (all original data and features) with the new 'label' column
-    # This df_combined will be used for analysis
     df_combined_for_analysis = pd.merge(
-        df_input, # Contains all OHLCV and features
-        labeled_data_to_save, # Contains only the 'label' column with the correct index
+        df_input,
+        labeled_data_to_save,
         left_index=True,
         right_index=True,
-        how='inner' # Ensure only matching indices are kept
+        how='inner'
     )
 
     if df_combined_for_analysis.empty:
@@ -202,16 +190,13 @@ def create_labels_pipeline(symbol: str, interval: str, label_strategy: str):
     # --- 6. Save Labeled Data ---
     logger.info(f"Attempting to save labeled data for {symbol} {interval}...")
     try:
-        # User requested to save labeled data WITHOUT strategy-specific suffix
         dm.save_data(
-            df_to_save=labeled_data_to_save, # Save only the 'label' column
+            df_to_save=labeled_data_to_save,
             symbol=symbol,
             interval=interval,
             data_type='labeled',
-            # name_suffix=f'_{label_strategy}' # REMOVED: User requested no strategy suffix for labeled file
         )
-        # The filename will now be like ADAUSDT_5m_labeled.parquet
-        logger.info(f"Successfully saved labeled data to {dm.get_file_path(symbol, interval, 'labeled')}") # Updated log message
+        logger.info(f"Successfully saved labeled data to {dm.get_file_path(symbol, interval, 'labeled')}")
     except Exception as e:
         logger.critical(f"Error saving labeled data: {e}", exc_info=True)
         sys.exit(1)
@@ -219,45 +204,22 @@ def create_labels_pipeline(symbol: str, interval: str, label_strategy: str):
     # --- 7. Perform Label Analysis and Plotting using LabelAnalyzer ---
     logger.info(f"Performing label analysis for {symbol} {interval} using LabelAnalyzer...")
     try:
-        # Determine which fee/slippage to use based on the active labeling strategy
-        # This logic should mirror how the labeling strategy itself gets its fees
-        fee_param = 0.0
-        slippage_param = 0.0
-        f_window_param = 0 # Default, will be set below
-
-        # Use the new strategy names for conditional logic
-        if label_strategy == 'strategy_2': # Corresponds to NetForwardReturnQuantileStrategy
-            fee_param = labeling_config.get('fee', 0.0)
-            slippage_param = labeling_config.get('slippage', 0.0)
-            f_window_param = labeling_config.get('f_window', 150)
-        elif label_strategy == 'strategy_3': # Corresponds to FutureRangeDominanceStrategy
-            fee_param = labeling_config.get('fee_range', 0.0)
-            slippage_param = labeling_config.get('slippage_range', 0.0)
-            f_window_param = labeling_config.get('f_window_range', 40)
-        elif label_strategy == 'strategy_1': # Corresponds to TripleBarrierStrategy
-            fee_param = STRATEGY_CONFIG.get('trading_fee_rate', 0.0)
-            slippage_param = STRATEGY_CONFIG.get('slippage_tolerance_pct', 0.0)
-            f_window_param = labeling_config.get('max_holding_bars', 100)
-        # Add conditions for 'strategy_4' and any new strategies here
-        # elif label_strategy == 'strategy_4':
-        #     fee_param = labeling_config.get('fee', 0.0)
-        #     slippage_param = STRATEGY_CONFIG.get('slippage', 0.0)
-        #     f_window_param = labeling_config.get('f_window', 100)
-
-
-        # Fallback for any other strategy or if not found
-        if f_window_param == 0: # If not set by specific strategy logic above
-             f_window_param = labeling_config.get('f_window', STRATEGY_CONFIG.get('analysis_future_horizons', [150])[0]) # Use a default or first analysis horizon
+        # Use values directly from the final_label_config instance for LabelAnalyzer
+        fee_param = label_config.trading_fee_rate
+        slippage_param = label_config.slippage_tolerance_pct
+        
+        # Get f_window from the specific strategy config within label_config
+        strategy_config_obj = getattr(label_config, label_config.label_type)
+        # Default to a safe value if 'future_return_window' is not found (shouldn't happen with proper schema)
+        f_window_param = getattr(strategy_config_obj, 'future_return_window', 150) # Use a reasonable default or fetch from general config if needed
 
         analyzer = LabelAnalyzer(paths=PATHS, logger=logger, fee=fee_param, slippage=slippage_param, f_window=f_window_param)
-        # Pass the df_combined_for_analysis (which contains OHLCV, features, and the 'label' column)
-        # to the analyzer for comprehensive analysis.
         analyzer.perform_all_analyses(
-            df_combined=df_combined_for_analysis, # Pass the comprehensive DataFrame
+            df_combined=df_combined_for_analysis,
             symbol=symbol,
             interval=interval,
-            label_strategy=label_strategy, # Pass the strategy name for folder creation (analysis output still uses it)
-            future_horizons=STRATEGY_CONFIG.get('analysis_future_horizons', [5, 10, 20, 50, 100, 150, 200]) # Use config or default
+            label_strategy=label_strategy,
+            future_horizons=strategy_config.analysis_future_horizons
         )
         logger.info("Label analysis complete using LabelAnalyzer.")
 

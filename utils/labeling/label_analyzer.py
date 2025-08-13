@@ -397,8 +397,10 @@ class LabelAnalyzer:
             missing = [col for col in required_cols if col not in df_combined.columns]
             self.logger.error(f"Missing required columns for Max Return/Loss analysis: {missing}. Skipping.")
             return
-
-        df_combined = df_combined.copy() # Work on a copy
+        
+        # Ensure df_combined is a copy before modifications (if it's not already)
+        df_combined = df_combined.copy()
+        
         # Ensure OHLC and label columns are numeric, coercing errors to NaN
         for col in ['open', 'high', 'low', 'close', 'label']:
             if col in df_combined.columns:
@@ -470,21 +472,23 @@ class LabelAnalyzer:
             mfr_summary = df_max_return_loss.groupby('label')['max_favorable_return'].agg(mfr_agg_funcs).reset_index()
             mal_summary = df_max_return_loss.groupby('label')['max_adverse_loss'].agg(mal_agg_funcs).reset_index()
 
-            mfr_col_names = ['Label', 'Count', 'Mean Max Favorable Return', 'Median Max Favorable Return']
-            mal_col_names = ['Label', 'Count', 'Mean Max Adverse Loss', 'Median Max Adverse Loss']
-
+            # Align column names based on actual added functions to avoid KeyError
+            mfr_summary_cols = ['Label', 'Count', 'Mean Max Favorable Return', 'Median Max Favorable Return']
+            mal_summary_cols = ['Label', 'Count', 'Mean Max Adverse Loss', 'Median Max Adverse Loss']
+            
             if any(q == 0.75 for q in quantiles_to_add if df_max_return_loss['max_favorable_return'].count() >= (1 / (1 - q))):
-                mfr_col_names.append('75th Percentile Max Favorable Return')
-                mal_col_names.append('75th Percentile Max Adverse Loss')
+                mfr_summary_cols.append('75th Percentile Max Favorable Return')
+                mal_summary_cols.append('75th Percentile Max Adverse Loss')
             if any(q == 0.90 for q in quantiles_to_add if df_max_return_loss['max_favorable_return'].count() >= (1 / (1 - q))):
-                mfr_col_names.append('90th Percentile Max Favorable Return')
-                mal_col_names.append('90th Percentile Max Adverse Loss')
+                mfr_summary_cols.append('90th Percentile Max Favorable Return')
+                mal_summary_cols.append('90th Percentile Max Adverse Loss')
             if any(q == 0.95 for q in quantiles_to_add if df_max_return_loss['max_favorable_return'].count() >= (1 / (1 - q))):
-                mfr_col_names.append('95th Percentile Max Favorable Return')
-                mal_col_names.append('95th Percentile Max Adverse Loss')
+                mfr_summary_cols.append('95th Percentile Max Favorable Return')
+                mal_summary_cols.append('95th Percentile Max Adverse Loss')
 
-            mfr_summary.columns = mfr_col_names
-            mal_summary.columns = mal_col_names
+            mfr_summary.columns = mfr_summary_cols[:len(mfr_summary.columns)] # Trim if not all quantiles were added
+            mal_summary.columns = mal_summary_cols[:len(mal_summary.columns)] # Trim if not all quantiles were added
+
         else:
             self.logger.warning("No Max Return/Loss data to calculate summary statistics.")
             mfr_summary = pd.DataFrame(columns=['Label', 'Count', 'Mean Max Favorable Return', 'Median Max Favorable Return'])

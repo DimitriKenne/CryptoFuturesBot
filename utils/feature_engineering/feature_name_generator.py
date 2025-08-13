@@ -1,4 +1,4 @@
-# utils/feature_name_generator.py
+# utils/feature_engineering/feature_name_generator.py
 
 from typing import List
 import logging
@@ -6,11 +6,12 @@ from pathlib import Path
 import sys
 
 # Add project root to Python path for imports
-PROJECT_ROOT = Path(__file__).parent.parent
+PROJECT_ROOT = Path(__file__).parent.parent.parent # utils/feature_engineering is two levels down from project root
 sys.path.append(str(PROJECT_ROOT))
 
 try:
-    from config.feature_config_schema import FeatureConfig, TemporalValidationConfig
+    # Import FeatureConfig and DEFAULT_FEATURE_CONFIG (now a dataclass instance)
+    from config.feature_config_schema import FeatureConfig, DEFAULT_FEATURE_CONFIG
 except ImportError as e:
     logging.error(f"Failed to import FeatureConfig from config.feature_config_schema: {e}")
     raise
@@ -18,7 +19,9 @@ except ImportError as e:
 logger = logging.getLogger(__name__)
 
 # Define FLOAT_EPSILON consistent with FeatureEngineer
-FLOAT_EPSILON = 1e-9
+# FLOAT_EPSILON = 1e-9
+# Import FLOAT_EPSILON from the central constants file (config.params)
+from config.params import FLOAT_EPSILON
 
 def generate_feature_names(config: FeatureConfig) -> List[str]:
     """
@@ -39,13 +42,13 @@ def generate_feature_names(config: FeatureConfig) -> List[str]:
     feature_names = []
 
     # --- 1. Price Transformations ---
-    feature_names.extend(['log_returns', 'typical_price'])
+    feature_names.extend(['log_returns', 'typical_price', 'mid_price', 'body_range', 'open_close_diff', 'high_low_diff'])
 
     # --- 2. Momentum Indicators ---
     for period in config.rsi_periods:
         feature_names.append(f'rsi_{period}')
     
-    stoch_d_period = 3 # Hardcoded in FeatureEngineer
+    stoch_d_period = 3 # Hardcoded in FeatureEngineer, so consistent here
     for period_k in config.stochastic_periods:
         feature_names.append(f'stoch_k_{period_k}')
         feature_names.append(f'stoch_d_{period_k}')
@@ -100,12 +103,8 @@ def generate_feature_names(config: FeatureConfig) -> List[str]:
 
     # --- 8. Pivot Point Features (Standard and Swing) ---
     # Standard Pivots
-    # Assuming the names are consistent if calculated
     standard_pivot_bases = ['pp', 'r1', 's1', 'r2', 's2', 'r3', 's3']
-    # These are base pivot levels, not always directly used as features, but could be.
-    # The 'is_above' and 'is_below' and normalized distances are derived from them.
-    # For now, include the raw pivot values too if they are being added to the DF
-    if config.pivot_point_method == 'standard': # Only standard is implemented
+    if config.pivot_point_method == 'standard':
         feature_names.extend(standard_pivot_bases)
 
     # Swing Pivots

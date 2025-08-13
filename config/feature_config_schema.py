@@ -1,57 +1,68 @@
 # config/feature_config_schema.py
 
 from dataclasses import dataclass, field
-from typing import List, Literal, Any, Dict
-# Removed sys and Path imports as they are no longer necessary for this file
-# This file defines a schema and default config, it doesn't need to manipulate sys.path
+from typing import List, Literal, Optional, Dict, Any
 
 @dataclass
 class TemporalValidationConfig:
-    """
-    Configuration for temporal safety validation within feature engineering.
-    """
+    """Configuration for temporal safety validation."""
     enabled: bool = True
     warning_correlation_threshold: float = 0.3
     error_correlation_threshold: float = 0.5
 
+    def __post_init__(self):
+        if not isinstance(self.enabled, bool):
+            raise TypeError("Temporal validation 'enabled' must be a boolean.")
+        if not isinstance(self.warning_correlation_threshold, float) or not (0 <= self.warning_correlation_threshold <= 1):
+            raise ValueError("warning_correlation_threshold must be a float between 0 and 1.")
+        if not isinstance(self.error_correlation_threshold, float) or not (0 <= self.error_correlation_threshold <= 1):
+            raise ValueError("error_correlation_threshold must be a float between 0 and 1.")
+        if self.warning_correlation_threshold > self.error_correlation_threshold:
+            raise ValueError("warning_correlation_threshold cannot be greater than error_correlation_threshold.")
+
+
 @dataclass
 class FeatureConfig:
     """
-    Defines the configuration parameters for the FeatureEngineer class.
-
-    This dataclass provides a structured and validated way to manage
-    all periods and settings for various technical indicators and custom features.
+    Defines configuration parameters for the FeaturesEngineer class,
+    including technical indicator periods and other feature settings.
     """
-    # General Feature Parameters
-    sma_periods: List[int] = field(default_factory=lambda: [10, 20, 50, 100, 200])
-    ema_periods: List[int] = field(default_factory=lambda: [10, 20, 50, 100, 200])
-    rsi_periods: List[int] = field(default_factory=lambda: [14, 21, 30])
-    bollinger_periods: List[int] = field(default_factory=lambda: [20, 30])
-    atr_periods: List[int] = field(default_factory=lambda: [14])
-    stochastic_periods: List[int] = field(default_factory=lambda: [14])
-    ao_periods: List[int] = field(default_factory=lambda: [5, 34]) # Awesome Oscillator periods [short, long]
-    cci_periods: List[int] = field(default_factory=lambda: [20])
-    mfi_periods: List[int] = field(default_factory=lambda: [14])
-    volume_periods: List[int] = field(default_factory=lambda: [20, 50]) # Used for CMF and MFI windows
-    support_resistance_periods: List[int] = field(default_factory=lambda: [50, 100, 200]) # Periods for S/R
-    candlestick_patterns: List[str] = field(default_factory=list) # List of TA-Lib pattern names
-    fvg_lookback_bars: int = 2 # Fair Value Gap lookback
-    z_score_periods: List[int] = field(default_factory=lambda: [30, 60]) # Z-score periods for close price
-    adr_periods: List[int] = field(default_factory=lambda: [14]) # Average Daily Range periods
-    trend_strength_periods: List[int] = field(default_factory=lambda: [20, 50]) # Trend strength periods [short_sma, long_sma]
+    # Technical Indicator Periods (Use lists for multiple periods where beneficial)
+    sma_periods: List[int] = field(default_factory=lambda: [10, 20, 50, 100])
+    ema_periods: List[int] = field(default_factory=lambda: [10, 14, 20, 50, 100, 200])
+    rsi_periods: List[int] = field(default_factory=lambda: [7, 14, 28, 50, 150])
+    bollinger_periods: List[int] = field(default_factory=lambda: [20, 30, 40, 150])
+    atr_periods: List[int] = field(default_factory=lambda: [5, 14, 20, 50, 150])
+    stochastic_periods: List[int] = field(default_factory=lambda: [14, 28])
+    ao_periods: List[int] = field(default_factory=lambda: [5, 34])
+    cci_periods: List[int] = field(default_factory=lambda: [14, 20, 40])
+    mfi_periods: List[int] = field(default_factory=lambda: [14, 28])
+    volume_periods: List[int] = field(default_factory=lambda: [10, 20, 30])
 
-    # Pivot Point Configuration (Standard Pivots based on daily/weekly/monthly OHLC)
+    # Other Feature Settings
     pivot_point_calculation_period: Literal['daily', 'weekly', 'monthly'] = 'daily'
-    pivot_point_method: Literal['standard', 'fibonacci', 'woodie', 'camarilla'] = 'standard' # Only 'standard' currently implemented
+    pivot_point_method: Literal['standard'] = 'standard' # Only 'standard' implemented for now
+    support_resistance_periods: List[int] = field(default_factory=lambda: [30, 50, 100])
+    candlestick_patterns: List[str] = field(default_factory=lambda: [
+        'hammer', 'engulfing', 'doji', 'evening_star', 'morning_star',
+        'harami', 'shooting_star', 'dark_cloud_cover', 'piercing_pattern'
+    ])
+    fvg_lookback_bars: int = 3
+    z_score_periods: List[int] = field(default_factory=lambda: [20, 30, 40])
+    adr_periods: List[int] = field(default_factory=lambda: [14, 28])
 
-    # Pine Script style Swing Pivot Configuration
+    # Derived Features
+    trend_strength_periods: List[int] = field(default_factory=lambda: [20, 50])
+    
+    # Swing Pivots & Breakout Parameters
     swing_pivot_left_bars: int = 15
     swing_pivot_right_bars: int = 15
-
-    # Volume Breakout and Oscillator Configuration
     volume_oscillator_short_ema: int = 5
     volume_oscillator_long_ema: int = 10
-    volume_threshold: float = 20.0 # Threshold for volume breakout detection (e.g., percentage above normal)
+    volume_threshold: float = 20.0 # Threshold for volume oscillator for breakout confirmation
+
+    # Temporal Safety Validation (for detecting lookahead bias during feature engineering)
+    temporal_validation: TemporalValidationConfig = field(default_factory=TemporalValidationConfig)
 
     # Lagged Features (simple shifts)
     lagged_features: Dict[str, List[int]] = field(default_factory=lambda: {
@@ -67,9 +78,6 @@ class FeatureConfig:
         'volume': [1],
     })
 
-    # Temporal Safety Validation Configuration
-    temporal_validation: TemporalValidationConfig = field(default_factory=TemporalValidationConfig)
-
     # NaN Handling
     remove_nan_rows: bool = True # Whether to remove rows with NaNs at the end of feature engineering
 
@@ -78,46 +86,47 @@ class FeatureConfig:
 
 
     def __post_init__(self):
-        """
-        Perform additional validation after initialization.
-        This allows for cross-field validation not easily done with simple type hints.
-        """
-        # Validate AO periods length and order
-        if len(self.ao_periods) != 2:
-            raise ValueError(f"AO periods must be a list of exactly two integers [short, long], but got {self.ao_periods}")
-        if not (0 < self.ao_periods[0] < self.ao_periods[1]):
-            raise ValueError(f"AO short period ({self.ao_periods[0]}) must be less than AO long period ({self.ao_periods[1]}) and both must be positive.")
-
-        # Validate Trend Strength periods length and order
-        if len(self.trend_strength_periods) != 2:
-            raise ValueError(f"Trend strength periods must be a list of exactly two integers [short, long], but got {self.trend_strength_periods}")
-        if not (0 < self.trend_strength_periods[0] < self.trend_strength_periods[1]):
-            raise ValueError(f"Trend strength short period ({self.trend_strength_periods[0]}) must be less than trend strength long period ({self.trend_strength_periods[1]}) and both must be positive.")
-        
-        # Validate Volume Oscillator EMA periods
-        if not (0 < self.volume_oscillator_short_ema < self.volume_oscillator_long_ema):
-            raise ValueError(f"Volume oscillator short EMA ({self.volume_oscillator_short_ema}) must be less than long EMA ({self.volume_oscillator_long_ema}) and both must be positive.")
-
-        # Validate that all period lists contain positive integers
+        # Basic validation for list types
         for attr in ['sma_periods', 'ema_periods', 'rsi_periods', 'bollinger_periods', 'atr_periods',
-                     'stochastic_periods', 'cci_periods', 'mfi_periods', 'volume_periods',
-                     'support_resistance_periods', 'z_score_periods', 'adr_periods']:
-            if not all(isinstance(p, int) and p > 0 for p in getattr(self, attr)):
-                raise ValueError(f"All periods in '{attr}' must be positive integers.")
-        
-        # Validate single positive integer values
-        for attr in ['fvg_lookback_bars', 'swing_pivot_left_bars', 'swing_pivot_right_bars', 'sequence_length_bars']:
-            val = getattr(self, attr)
-            if not isinstance(val, int) or val <= 0:
-                raise ValueError(f"'{attr}' must be a positive integer.")
-        
-        # Validate volume_threshold type
-        if not isinstance(self.volume_threshold, (int, float)):
-            raise ValueError("'volume_threshold' must be a number.")
+                     'stochastic_periods', 'ao_periods', 'cci_periods', 'mfi_periods', 'volume_periods',
+                     'support_resistance_periods', 'z_score_periods', 'adr_periods', 'trend_strength_periods']:
+            if not isinstance(getattr(self, attr), list) or not all(isinstance(x, int) and x > 0 for x in getattr(self, attr)):
+                raise ValueError(f"'{attr}' must be a list of positive integers.")
 
-        # Validate candlestick_patterns elements (ensure they are strings, optional non-empty check)
-        if not all(isinstance(p, str) for p in self.candlestick_patterns):
+        if self.pivot_point_calculation_period not in ['daily', 'weekly', 'monthly']:
+            raise ValueError("pivot_point_calculation_period must be 'daily', 'weekly', or 'monthly'.")
+        if self.pivot_point_method not in ['standard']: # Extend as more methods are implemented
+            raise ValueError("pivot_point_method must be 'standard'.")
+        if not isinstance(self.candlestick_patterns, list) or not all(isinstance(x, str) for x in self.candlestick_patterns):
             raise ValueError("'candlestick_patterns' must be a list of strings.")
+        if not isinstance(self.fvg_lookback_bars, int) or self.fvg_lookback_bars <= 0:
+            raise ValueError("'fvg_lookback_bars' must be a positive integer.")
+        
+        # Validate swing pivot parameters
+        if not isinstance(self.swing_pivot_left_bars, int) or self.swing_pivot_left_bars <= 0:
+            raise ValueError("swing_pivot_left_bars must be a positive integer.")
+        if not isinstance(self.swing_pivot_right_bars, int) or self.swing_pivot_right_bars <= 0:
+            raise ValueError("swing_pivot_right_bars must be a positive integer.")
+        if not isinstance(self.volume_oscillator_short_ema, int) or self.volume_oscillator_short_ema <= 0:
+            raise ValueError("volume_oscillator_short_ema must be a positive integer.")
+        if not isinstance(self.volume_oscillator_long_ema, int) or self.volume_oscillator_long_ema <= 0:
+            raise ValueError("volume_oscillator_long_ema must be a positive integer.")
+        if self.volume_oscillator_short_ema >= self.volume_oscillator_long_ema:
+            raise ValueError("volume_oscillator_short_ema must be less than volume_oscillator_long_ema.")
+        if not isinstance(self.volume_threshold, (int, float)) or self.volume_threshold < 0:
+            raise ValueError("volume_threshold must be a non-negative number.")
+
+        # Temporal Validation config: Ensure nested dataclass is instantiated
+        if isinstance(self.temporal_validation, dict):
+            self.temporal_validation = TemporalValidationConfig(**self.temporal_validation)
+        elif not isinstance(self.temporal_validation, TemporalValidationConfig):
+            raise TypeError("temporal_validation must be a dictionary or TemporalValidationConfig instance.")
+
+        if not isinstance(self.sequence_length_bars, int) or self.sequence_length_bars <= 0:
+            raise ValueError("'sequence_length_bars' must be a positive integer.")
+        
+        if not isinstance(self.remove_nan_rows, bool):
+            raise TypeError("'remove_nan_rows' must be a boolean.")
 
         # Validate lagged_features configuration
         for col, lags in self.lagged_features.items():
@@ -133,66 +142,6 @@ class FeatureConfig:
             if not (isinstance(orders, list) and all(isinstance(o, int) and o > 0 for o in orders)):
                 raise ValueError(f"Differencing orders for '{col}' must be a list of positive integers, got {orders}.")
 
-# --- Default Feature Configuration Values ---
-# This dictionary will be used to initialize the FeatureConfig dataclass
-# when no specific configuration is provided.
-DEFAULT_FEATURE_CONFIG = {
-    # Technical Indicator Periods (Use lists for multiple periods where beneficial)
-    'sma_periods': [10, 20, 50, 100],   # Simple Moving Averages (Standard range for context)
-    'ema_periods': [10, 14, 20, 50, 100, 200], # Exponential Moving Averages (Added 200 for longer-term context)
-    'rsi_periods': [7, 14, 28, 50, 150],        # Relative Strength Index (Shorter to medium-long for 5m)
-    'bollinger_periods': [20, 30, 40, 150],     # Bollinger Bands (Range around common values)
-    'atr_periods': [5, 14, 20, 50, 150],           # Average True Range (Standard and variants for volatility)
-    'stochastic_periods': [14, 28],      # Stochastic Oscillator %K (Standard and double)
-    'ao_periods': [5, 34],                  # Awesome Oscillator (Standard periods)
-    'cci_periods': [14, 20, 40],           # Commodity Channel Index (Faster, standard, slower)
-    'mfi_periods': [14, 28],             # Money Flow Index (Standard and double)
-    'volume_periods': [10, 20, 30],        # Period for Volume-based indicators (e.g., CMF, OBV calculation window if used)
 
-    # Other Feature Settings
-    'pivot_point_calculation_period': 'daily', # 'daily', 'weekly', 'monthly'
-    'pivot_point_method': 'standard', # 'standard', 'fibonacci', 'woodie', 'camarilla' (only 'standard' implemented for now)
-    'support_resistance_periods': [30, 50, 100], # list[int]: Lookback for simple S/R levels (Intraday relevant ranges).
-    'candlestick_patterns': [               # list[str]: Patterns to detect (uses talib).
-        'hammer', 'engulfing', 'doji', 'evening_star', 'morning_star',
-        'harami', 'shooting_star', 'dark_cloud_cover', 'piercing_pattern'
-    ],
-    'fvg_lookback_bars': 3,                 # int: Lookback for Fair Value Gap detection (standard 3-candle is i vs i-2).
-    'z_score_periods': [20, 30, 40],        # list[int]: Periods for Z-score calculation.
-    'adr_periods': [14, 28],               # list[int]: Average 5m Range period (different lookbacks for recent volatility).
-
-    # Derived Features
-    'trend_strength_periods': [20, 50],     # list[int]: Short/long periods for trend strength (based on SMAs).
-    
-    # Swing Pivots & Breakout Parameters
-    'swing_pivot_left_bars': 15,
-    'swing_pivot_right_bars': 15,
-    'volume_oscillator_short_ema': 5,
-    'volume_oscillator_long_ema': 10,
-    'volume_threshold': 20.0, # Threshold for volume oscillator for breakout confirmation (float)
-
-    # Temporal Safety Validation (for detecting lookahead bias during feature engineering)
-    # IMPORTANT: Initialize this directly as a TemporalValidationConfig object
-    'temporal_validation': TemporalValidationConfig(
-        enabled=True,
-        warning_correlation_threshold=0.3,
-        error_correlation_threshold=0.5
-    ),
-
-    # NEW: Lagged Features (simple shifts)
-    'lagged_features': {
-        'close': [1, 2, 3],
-        'volume': [1, 2],
-        'high': [1],
-        'low': [1]
-    },
-
-    # NEW: Differenced Features
-    'differenced_features': {
-        'close': [1],
-        'volume': [1],
-    },
-
-    # Sequence Length (MUST match model and strategy config if using sequence models like LSTM)
-    'sequence_length_bars': 5,
-}
+# Default configuration instance
+DEFAULT_FEATURE_CONFIG = FeatureConfig()

@@ -3,8 +3,11 @@
 import pandas as pd
 import numpy as np
 import logging
-from typing import Dict, Any, List, Optional
+from typing import Any, List, Optional
 from .base_strategy import BaseLabelingStrategy, logger, FLOAT_EPSILON
+
+# Import the specific config dataclass for this strategy
+from config.label_config_schema import Strategy3Config
 
 class Strategy3(BaseLabelingStrategy):
     """
@@ -22,58 +25,53 @@ class Strategy3(BaseLabelingStrategy):
       is positive and significantly greater than the potential net profit (or loss)
       from an upward move, and its "short dominance ratio" meets a specified quantile threshold.
     - A label of '0' (Neutral) is assigned otherwise.
-
-    Parameters:
-    - 'f_window_range': The forward lookahead window (in bars) to determine future max high and min low.
-    - 'fee_range': The transaction fee rate used in net return calculations.
-    - 'slippage_range': The estimated slippage rate used in net return calculations.
-    - 'long_ratio_quantile_pct': The percentile for the threshold of the long dominance ratio.
-    - 'short_ratio_quantile_pct': The percentile for the threshold of the short dominance ratio.
     """
 
-    def __init__(self, config: Dict[str, Any], logger: logging.Logger):
+    def __init__(self, config: Strategy3Config, logger: logging.Logger, trading_fee_rate: float, slippage_tolerance_pct: float):
         """
         Initializes Strategy 3 (Future Range Dominance Strategy).
+
+        Args:
+            config (Strategy3Config): The configuration dataclass for this strategy.
+            logger (logging.Logger): A logger instance.
+            trading_fee_rate (float): The transaction fee rate.
+            slippage_tolerance_pct (float): The estimated slippage rate.
         """
-        super().__init__(config, logger)
+        # Pass config to the superclass, which now also accepts fee/slippage
+        super().__init__(config, logger, trading_fee_rate, slippage_tolerance_pct)
         self.logger.info("Strategy 3 (Future Range Dominance) initializing...")
         self._validate_strategy_config()
 
-        self.f_window_range = self.config['f_window_range']
-        self.fee_range = self.config['fee_range']
-        self.slippage_range = self.config['slippage_range']
-        self.long_ratio_quantile_pct = self.config['long_ratio_quantile_pct']
-        self.short_ratio_quantile_pct = self.config['short_ratio_quantile_pct']
+        # Access parameters directly from the Strategy3Config dataclass
+        self.future_return_window = self.config.future_return_window
+        self.long_ratio_quantile_pct = self.config.long_ratio_quantile_pct
+        self.short_ratio_quantile_pct = self.config.short_ratio_quantile_pct
+        self.min_profit_threshold = self.config.min_profit_threshold
 
-        self.logger.info(f"  Forward Window (f_window_range): {self.f_window_range} bars")
-        self.logger.info(f"  Transaction Fee (range): {self.fee_range}")
-        self.logger.info(f"  Slippage (range): {self.slippage_range}")
+        self.logger.info(f"  Forward Window (future_return_window): {self.future_return_window} bars")
+        self.logger.info(f"  Transaction Fee: {self.trading_fee_rate}")
+        self.logger.info(f"  Slippage: {self.slippage_tolerance_pct}")
         self.logger.info(f"  Long Ratio Quantile Percentile: {self.long_ratio_quantile_pct}")
         self.logger.info(f"  Short Ratio Quantile Percentile: {self.short_ratio_quantile_pct}")
+        self.logger.info(f"  Minimum Profit Threshold: {self.min_profit_threshold}")
 
 
     def _validate_strategy_config(self):
         """
-        Validates configuration parameters specific to Strategy 3.
+        Validates configuration parameters specific to Strategy 3,
+        now accessing directly from self.config (Strategy3Config).
         """
-        required_keys = [
-            'f_window_range', 'fee_range', 'slippage_range',
-            'long_ratio_quantile_pct', 'short_ratio_quantile_pct'
-        ]
-        for key in required_keys:
-            if key not in self.config:
-                raise KeyError(f"Missing required configuration key for Strategy 3: '{key}'")
-
-        if not isinstance(self.config['f_window_range'], int) or self.config['f_window_range'] <= 0:
-            raise ValueError("'f_window_range' must be a positive integer.")
-        if not isinstance(self.config['fee_range'], (int, float)) or self.config['fee_range'] < 0:
-            raise ValueError("'fee_range' must be a non-negative number.")
-        if not isinstance(self.config['slippage_range'], (int, float)) or self.config['slippage_range'] < 0:
-            raise ValueError("'slippage_range' must be a non-negative number.")
-        if not isinstance(self.config['long_ratio_quantile_pct'], (int, float)) or not (0 < self.config['long_ratio_quantile_pct'] < 100):
+        if not isinstance(self.config.future_return_window, int) or self.config.future_return_window <= 0:
+            raise ValueError("'future_return_window' must be a positive integer.")
+        
+        if not isinstance(self.config.long_ratio_quantile_pct, (int, float)) or not (0 < self.config.long_ratio_quantile_pct < 100):
             raise ValueError("'long_ratio_quantile_pct' must be a number between 0 and 100 (exclusive).")
-        if not isinstance(self.config['short_ratio_quantile_pct'], (int, float)) or not (0 < self.config['short_ratio_quantile_pct'] < 100):
+        
+        if not isinstance(self.config.short_ratio_quantile_pct, (int, float)) or not (0 < self.config.short_ratio_quantile_pct < 100):
             raise ValueError("'short_ratio_quantile_pct' must be a number between 0 and 100 (exclusive).")
+        
+        if not isinstance(self.config.min_profit_threshold, (int, float)) or self.config.min_profit_threshold < 0:
+            raise ValueError("'min_profit_threshold' must be a non-negative number.")
 
         self.logger.debug("Strategy 3 config validated.")
 
@@ -94,35 +92,20 @@ class Strategy3(BaseLabelingStrategy):
 
         df_copy = df.copy() # Work on a copy
 
-        # Compute future max high and min low within f_window_range
-        # Shift by -self.f_window_range + 1 to align the window correctly:
-        # max/min of current bar up to f_window_range bars into the future.
-        # .shift(-(self.f_window_range - 1)) would be the start of the window
-        # .shift(-self.f_window_range) would be the end of the window
-        # We want the max/min over the window [current_bar_idx + 1, current_bar_idx + f_window_range]
-        # This requires a forward-looking rolling window. Pandas' rolling doesn't directly support this
-        # without reversing the DataFrame.
-        # A common way is to shift the future prices to the current row, then take max/min.
-
-        # Create future price series for max/min calculation
-        future_highs = df_copy['high'].iloc[::-1].rolling(window=self.f_window_range).max().iloc[::-1].shift(1)
-        future_lows = df_copy['low'].iloc[::-1].rolling(window=self.f_window_range).min().iloc[::-1].shift(1)
+        # Compute future max high and min low within future_return_window
+        future_highs = df_copy['high'].iloc[::-1].rolling(window=self.future_return_window).max().iloc[::-1].shift(1)
+        future_lows = df_copy['low'].iloc[::-1].rolling(window=self.future_return_window).min().iloc[::-1].shift(1)
         
         df_copy['Future_Max_High'] = future_highs
         df_copy['Future_Min_Low'] = future_lows
 
         # Calculate net returns for max/min moves from current close
-        # These factors account for fees and slippage on both entry and exit
-        # For long entry: current_close * (1 + fee + slippage)
-        # For long exit: future_price * (1 - fee - slippage)
-        # For short entry: current_close * (1 - fee - slippage)
-        # For short exit: future_price * (1 + fee + slippage)
+        # Using self.trading_fee_rate and self.slippage_tolerance_pct from base class
+        entry_cost_long_factor = (1 + self.trading_fee_rate + self.slippage_tolerance_pct)
+        exit_revenue_long_factor = (1 - self.trading_fee_rate - self.slippage_tolerance_pct)
 
-        entry_cost_long_factor = (1 + self.fee_range + self.slippage_range)
-        exit_revenue_long_factor = (1 - self.fee_range - self.slippage_range)
-
-        entry_revenue_short_factor = (1 - self.fee_range - self.slippage_range)
-        exit_cost_short_factor = (1 + self.fee_range + self.slippage_range)
+        entry_revenue_short_factor = (1 - self.trading_fee_rate - self.slippage_tolerance_pct)
+        exit_cost_short_factor = (1 + self.trading_fee_rate + self.slippage_tolerance_pct)
         
         safe_current_close = df_copy['close'].replace(0, np.nan)
 
@@ -130,7 +113,6 @@ class Strategy3(BaseLabelingStrategy):
         df_copy['Net_Return_Long_Potential'] = (df_copy['Future_Max_High'] * exit_revenue_long_factor - safe_current_close * entry_cost_long_factor) / (safe_current_close * entry_cost_long_factor)
 
         # Potential Net Profit if going short from current close to Future_Min_Low
-        # This is (Entry_Value - Exit_Value) / Entry_Value
         df_copy['Net_Return_Short_Potential'] = (safe_current_close * entry_revenue_short_factor - df_copy['Future_Min_Low'] * exit_cost_short_factor) / (safe_current_close * entry_revenue_short_factor)
 
 
@@ -143,21 +125,15 @@ class Strategy3(BaseLabelingStrategy):
             self.logger.error("DataFrame is empty after dropping NaNs. Cannot generate labels.")
             return pd.DataFrame(index=df_copy.index, data={'label': 0})
 
-        # Calculate dominance ratios based on potentials (now directly using Net_Return_X_Potential)
-        # Ratio = (Dominant Potential) / (Opposing Potential Magnitude + epsilon)
-        # If opposing potential is not filtered (i.e., it's a loss or below min_profit_threshold), use its absolute value.
-        # If both are filtered out, ratio is NaN.
-
-        # Upward dominance ratio (only if Net_Return_Long_Potential is positive)
+        # Calculate dominance ratios based on potentials
         df_copy['Long_Dominance_Ratio'] = np.where(
-            df_copy['Net_Return_Long_Potential'] > FLOAT_EPSILON, # Only if long potential is positive
+            df_copy['Net_Return_Long_Potential'] > self.min_profit_threshold, # Only if long potential is above min profit
             df_copy['Net_Return_Long_Potential'] / (np.abs(df_copy['Net_Return_Short_Potential']) + FLOAT_EPSILON),
             np.nan
         )
 
-        # Downward dominance ratio (only if Net_Return_Short_Potential is positive)
         df_copy['Short_Dominance_Ratio'] = np.where(
-            df_copy['Net_Return_Short_Potential'] > FLOAT_EPSILON, # Only if short potential is positive
+            df_copy['Net_Return_Short_Potential'] > self.min_profit_threshold, # Only if short potential is above min profit
             df_copy['Net_Return_Short_Potential'] / (np.abs(df_copy['Net_Return_Long_Potential']) + FLOAT_EPSILON),
             np.nan
         )
@@ -186,23 +162,23 @@ class Strategy3(BaseLabelingStrategy):
         df_copy['label'] = 0 # Default to neutral
 
         # Condition for Long (1):
-        # 1. Long potential is positive
+        # 1. Long potential is positive and above min_profit_threshold
         # 2. Long potential is greater than short potential
         # 3. Long dominance ratio meets its quantile threshold
         long_condition = (
-            (df_copy['Net_Return_Long_Potential'] > FLOAT_EPSILON) & # Long potential must be positive
-            (df_copy['Net_Return_Long_Potential'] > df_copy['Net_Return_Short_Potential']) & # Long potential must be greater than short potential
+            (df_copy['Net_Return_Long_Potential'] > self.min_profit_threshold) &
+            (df_copy['Net_Return_Long_Potential'] > df_copy['Net_Return_Short_Potential']) &
             (df_copy['Long_Dominance_Ratio'] >= long_ratio_threshold)
         )
         df_copy.loc[long_condition, 'label'] = 1
 
         # Condition for Short (-1):
-        # 1. Short potential is positive
+        # 1. Short potential is positive and above min_profit_threshold
         # 2. Short potential is greater than long potential
         # 3. Short dominance ratio meets its quantile threshold
         short_condition = (
-            (df_copy['Net_Return_Short_Potential'] > FLOAT_EPSILON) & # Short potential must be positive
-            (df_copy['Net_Return_Short_Potential'] > df_copy['Net_Return_Long_Potential']) & # Short potential must be greater than long potential
+            (df_copy['Net_Return_Short_Potential'] > self.min_profit_threshold) &
+            (df_copy['Net_Return_Short_Potential'] > df_copy['Net_Return_Long_Potential']) &
             (df_copy['Short_Dominance_Ratio'] >= short_ratio_threshold)
         )
         df_copy.loc[short_condition, 'label'] = -1

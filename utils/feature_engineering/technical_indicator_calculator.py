@@ -14,7 +14,9 @@ from ta.volume import OnBalanceVolumeIndicator, ChaikinMoneyFlowIndicator, MFIIn
 logger = logging.getLogger(__name__)
 
 # Define FLOAT_EPSILON for robust floating-point comparisons, consistent with FeatureEngineer
-FLOAT_EPSILON = 1e-9
+# FLOAT_EPSILON = 1e-9
+# Import FLOAT_EPSILON from the central constants file (config.params)
+from config.params import FLOAT_EPSILON
 
 class TechnicalIndicatorCalculator:
     """

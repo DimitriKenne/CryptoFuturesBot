@@ -12,56 +12,49 @@ This project was initiated in **April 2025**, directly inspired by the research 
 
 ## **Features**
 
-* **Modular and Scalable Architecture**  
+* **Modular and Scalable Architecture**
   - Clear separation of core functionalities into distinct modules (data management, feature engineering, model training, strategy execution, notifications, exchange integration).
   - Easily adaptable to new exchanges, models, or strategy components.
-
-* **Multi-Exchange Compatibility**  
+* **Multi-Exchange Compatibility**
   - Dedicated adapters for seamless integration with various cryptocurrency futures exchanges (currently implemented for Binance Futures).
-
-* **Advanced Feature Engineering Pipeline**  
+* **Advanced Feature Engineering Pipeline**
   - Transforms raw OHLCV data into a rich set of predictive features:
     - **Comprehensive Technical Indicators:** SMA, EMA, RSI, Bollinger Bands, ATR, Stochastic, CCI, MFI, MACD (multi-period).
     - **Candlestick Pattern Recognition:** Automated detection using TA-Lib.
     - **Custom Statistical & Price Action Features:** Fair Value Gaps (FVG), Z-scores, Average Daily Range (ADR), trend strength metrics, lagged prices, differenced prices.
     - **Temporal Safety Validation:** Prevents lookahead bias by ensuring all features are derived exclusively from past data.
-
-* **Machine Learning-Driven Signal Generation**  
+    - **Volatility Regime Calculation:** Market regime (low/medium/high) based on Bollinger Bands width or ATR.
+* **Machine Learning-Driven Signal Generation**
   - **Ternary Classification:** Models classify future price movements as Long (1), Short (-1), or Neutral (0).
   - **Supported Models:** LSTM, XGBoost, RandomForest.
   - **Hyperparameter Tuning:** RandomizedSearchCV with TimeSeriesSplit for robust model selection.
-
-* **Configurable and Dynamic Strategy Logic**  
+* **Configurable and Dynamic Strategy Logic**
   - **Confidence-Based Entry Filtering:** Filters trades based on model prediction probability (confidence score).
   - **Adaptive Volatility Regime Filtering:** Dynamically adjusts trade entry and max holding periods based on market volatility regime.
   - **Trend Alignment Filter:** EMA-based filter to ensure trades are aligned with the dominant market trend.
   - **Directional Control:** Enable/disable long and short entries independently.
   - **Neutral Signal Management:** Configurable behavior for exiting positions on neutral signals.
   - **Dynamic Take Profit/Stop Loss (TP/SL):** TP/SL levels calculated dynamically based on ATR or fixed percentages.
-
-* **Robust Backtesting Engine**  
+* **Robust Backtesting Engine**
   - **Realistic Simulation:** Accounts for trading fees, slippage, and liquidation mechanics.
   - **Detailed Performance Metrics:** Total return, CAGR, max drawdown, win rate, profit factor, average PnL per trade.
   - **Trade Management Simulation:** Position opening, closing, reversal logic with fee and margin handling.
   - **Persistent Results:** Trade logs (Parquet) and summary metrics (JSON) for post-analysis.
-
-* **Live Trading Capabilities**  
+* **Live Trading Capabilities**
   - **Real-time Data Integration:** Direct connection to exchange data feeds.
   - **Automated Trade Execution:** Market orders, open position management, TP/SL order placement/cancellation.
   - **Resilient State Management:** Periodic state saving for capital and open positions.
   - **Critical Event Notifications:** Telegram alerts for trade executions, errors, and bot status.
-
-* **Data Management & Persistence**  
+* **Data Management & Persistence**
   - **Data Fetching:** Scripts for historical OHLCV data.
   - **Data Processing & Storage:** Raw, processed (features), and labeled data in Parquet format.
-
-* **Flexible Label Generation**  
-  - **Triple Barrier Method (`triple_barrier`):** Labels assigned based on which barrier (profit, loss, time) is hit first; supports dynamic ATR-based barriers.
-  - **Net Forward Return Quantile Strategy (`net_forward_return_quantile`):** Labels based on net percentage return over a forward window, targeting genuinely profitable moves.
-  - **Future Range Dominance Strategy (`future_range_dominance`):** Labels based on dominance of net profit in one direction over the other, with minimum profitability threshold.
-  - **Label Propagation Smoothing:** Configurable `min_holding_period` to smooth raw labels and filter out noise.
-
-* **Comprehensive Logging**  
+* **Flexible Label Generation**
+  - **Strategy 1 (Triple Barrier):** Labels assigned based on which barrier (profit, loss, time) is hit first; supports dynamic ATR-based barriers.
+  - **Strategy 2 (Net Forward Return Quantile):** Labels based on net percentage return over a forward window, targeting genuinely profitable moves.
+  - **Strategy 3 (Future Range Dominance):** Labels based on dominance of net profit in one direction over the other, with minimum profitability threshold.
+  - **Strategy 4 (Clustering-Based Labeling):** Labels based on market regimes identified by clustering of technical features and mapping to historical profitability.
+  - **Label Propagation Smoothing:** Configurable min_holding_period to smooth raw labels and filter out noise.
+* **Comprehensive Logging**
   - Rotating logs for all stages of bot operation, backtesting, and data processing.
 
 ---
@@ -82,8 +75,14 @@ This project was initiated in **April 2025**, directly inspired by the research 
 │   └── binance_futures_adapter.py
 ├── config/                     # Configuration files
 │   ├── __init__.py
-│   ├── params.py               # Centralized parameters for all modules
+│   ├── params.py               # Central import hub for configuration schemas
+│   ├── general_config_schema.py # Schema and default values for General settings
+│   ├── exchange_config_schema.py # Schema and default values for Exchange settings
 │   ├── feature_config_schema.py # Schema and default values for Feature Engineering
+│   ├── label_config_schema.py   # Schema and default values for Labeling
+│   ├── model_config_schema.py   # Schema and default values for Model Training
+│   ├── strategy_config_schema.py # Schema and default values for Strategy Logic
+│   ├── notifier_config_schema.py # Schema and default values for Notifier settings
 │   └── paths.py                # Defines project paths
 ├── data/                       # Data storage
 │   ├── labeled/                # Labeled data for model training
@@ -114,6 +113,7 @@ This project was initiated in **April 2025**, directly inspired by the research 
 │   ├── fetch_data.py
 │   ├── generate_features.py
 │   ├── monte_carlo_backtest.py
+│   ├── setup_environment.py    # NEW: Potential script for environment setup (e.g., creating dirs)
 │   └── train_model.py
 └── utils/                      # Core utility modules
     ├── __init__.py
@@ -121,22 +121,26 @@ This project was initiated in **April 2025**, directly inspired by the research 
     ├── data_manager.py
     ├── exceptions.py
     ├── exchange_interface.py
-    ├── label_generator.py
-    ├── labeling_strategies/
-    │   ├── base_strategy.py
-    │   ├── directional_ternary.py
-    │   ├── ema_return_percentile.py
-    │   ├── max_return_quantile.py
-    │   └── triple_barrier.py
     ├── logger_config.py
     ├── model_trainer.py
     ├── notification_manager.py
     ├── results_analyzer.py
-    └── feature_engineering/
+    ├── feature_engineering/
+    │   ├── __init__.py
+    │   ├── feature_engineer.py
+    │   ├── feature_name_generator.py
+    │   └── technical_indicator_calculator.py
+    └── labeling/
         ├── __init__.py
-        ├── feature_engineer.py
-        ├── feature_name_generator.py
-        └── technical_indicator_calculator.py
+        ├── label_analyzer.py
+        ├── label_generator.py
+        └── strategies/
+            ├── __init__.py
+            ├── base_strategy.py
+            ├── strategy1.py
+            ├── strategy2.py
+            ├── strategy3.py
+            └── strategy4.py
 ```
 
 ---
@@ -147,24 +151,25 @@ This project was initiated in **April 2025**, directly inspired by the research 
 
 Orchestrates the live trading process:
 
-- **Initialization:** Loads configuration, logging, exchange adapters, feature engineers, trained ML model, and previous bot state.
-- **Main Loop:** Fetches new candle data, processes features, gets model signal, and executes trade logic.
-- **Signal Processing:** Uses `_get_signal` and `_apply_entry_filters` for model predictions and strategy rules.
-- **Trade Execution:** Manages position opening, closing, reversal, sizing, dynamic TP/SL, and trade tracking.
-- **State Management:** Periodically saves capital and open positions to JSON, appends closed trades to Parquet.
+* **Initialization:** Loads configuration, logging, exchange adapters, feature engineers, trained ML model, and previous bot state.
+* **Main Loop:** Fetches new candle data, processes features, gets model signal, and executes trade logic.
+* **Signal Processing:** Uses _get_signal and _apply_entry_filters for model predictions and strategy rules.
+* **Trade Execution:** Manages position opening, closing, reversal, sizing, dynamic TP/SL, and trade tracking.
+* **State Management:** Periodically saves capital and open positions to JSON, appends closed trades to Parquet.
 
 ---
 
 ### **config/params.py**
 
-Central hub for all project parameters:
+This file now serves as a **central import hub** for all granular configuration schemas. It allows other modules to easily access a comprehensive set of parameters defined and validated in their respective dedicated files. The actual parameters are defined in:
 
-- **General Configuration:** Random seeds, parallel processing, hyperparameter tuning.
-- **Exchange Configuration (`EXCHANGE_CONFIG`):** API keys, connection settings, market specifics.
-- **Feature Engineering Configuration:** Now detailed in `config/feature_config_schema.py`, with high-level overrides in `params.py`.
-- **Labeling Configuration (`LABELING_CONFIG`):** Labeling strategy and parameters, `min_holding_period` for smoothing.
-- **Model Training Configuration (`MODEL_CONFIG`):** Hyperparameters and settings for Random Forest, XGBoost, LSTM.
-- **Strategy Configuration (`STRATEGY_CONFIG`):** Trading behavior, risk, TP/SL, filters, sequence length for LSTM.
+* config/general_config_schema.py
+* config/exchange_config_schema.py
+* config/feature_config_schema.py
+* config/label_config_schema.py
+* config/model_config_schema.py
+* config/strategy_config_schema.py
+* config/notifier_config_schema.py
 
 ---
 
@@ -172,12 +177,12 @@ Central hub for all project parameters:
 
 Transforms raw OHLCV data into technical/statistical features:
 
-- **Indicator Calculation:** SMA, EMA, RSI, Stochastic, CCI, MFI, Bollinger Bands, ATR, OBV, CMF, MACD (multi-period).
-- **Pattern Recognition:** Candlestick patterns via TA-Lib.
-- **Custom Features:** FVG, Z-scores, ADR, trend strength, lagged/differenced prices, support/resistance.
-- **Temporal Safety:** All features calculated using only past data; validation checks for lookahead bias.
-- **Configurable Periods:** Multiple lookback periods via `feature_config_schema.py`.
-- **Volatility Regime Calculation:** Market regime (low/medium/high) based on ATR.
+* **Indicator Calculation:** SMA, EMA, RSI, Stochastic, CCI, MFI, Bollinger Bands, ATR, OBV, CMF, MACD (multi-period).
+* **Pattern Recognition:** Candlestick patterns via TA-Lib.
+* **Custom Features:** FVG, Z-scores, ADR, trend strength, lagged/differenced prices, support/resistance.
+* **Temporal Safety:** All features calculated using only past data; validation checks for lookahead bias.
+* **Configurable Periods:** Multiple lookback periods via config/feature_config_schema.py.
+* **Volatility Regime Calculation:** Market regime (low/medium/high) based on Bollinger Bands width or ATR.
 
 ---
 
@@ -185,84 +190,84 @@ Transforms raw OHLCV data into technical/statistical features:
 
 Robust backtesting engine:
 
-- **Initialization:** Merges configs for simulation (strategy, backtester, exchange, feature).
-- **Data Preparation:** Validates input, calculates missing indicators, aligns signals/probabilities.
-- **Simulation Loop:** Applies strategy logic bar by bar.
-- **Trade Logic:** Entry filters, position sizing, dynamic TP/SL, exit conditions (SL, TP, liquidation, max holding, neutral), reversal logic.
-- **Results & Metrics:** Tracks trades, PnL, equity curve, performance metrics, PnL consistency check.
-- **Saving Results:** Trade logs (Parquet) and metrics (JSON).
+* **Initialization:** Merges configs for simulation (strategy, backtester, exchange, feature).
+* **Data Preparation:** Validates input, calculates missing indicators, aligns signals/probabilities.
+* **Simulation Loop:** Applies strategy logic bar by bar.
+* **Trade Logic:** Entry filters, position sizing, dynamic TP/SL, exit conditions (SL, TP, liquidation, max holding, neutral), reversal logic.
+* **Results & Metrics:** Tracks trades, PnL, equity curve, performance metrics, PnL consistency check.
+* **Saving Results:** Trade logs (Parquet) and metrics (JSON).
 
 ---
 
-### **utils/label_generator.py**
+### **utils/labeling/label_generator.py**
 
 Creates target labels for ML models:
 
-- **Strategy-Based Labeling:** Multiple strategies:
-    - **Triple Barrier (`triple_barrier`):** Profit/loss/time barriers, ATR-based, robust.
-    - **Directional Ternary:** Predefined percentage price change.
-    - **Max Return Quantile:** Significant moves by max favorable excursion.
-    - **EMA Return Percentile:** EMA trend + percentile thresholds.
-    - **Net Forward Return Quantile:** Net future return vs quantile threshold.
-    - **Future Range Dominance:** Directional dominance in net profit.
-- **Label Propagation Smoothing:** `min_holding_period` for stable signals.
-- **Input Validation:** Checks for required OHLCV/features.
-- **Extensible Design:** Easily add new strategies via `BaseLabelingStrategy`.
+* **Strategy-Based Labeling:** Multiple strategies selectable via command-line argument:
+  * **strategy_1 (Triple Barrier):** Labels assigned based on which barrier (profit, loss, time) is hit first; supports dynamic ATR-based barriers.
+  * **strategy_2 (Net Forward Return Quantile):** Labels based on net percentage return over a forward window, targeting genuinely profitable moves.
+  * **strategy_3 (Future Range Dominance):** Labels based on dominance of net profit in one direction over the other, with minimum profitability threshold.
+  * **strategy_4 (Clustering-Based Labeling):** Labels based on market regimes identified by clustering of technical features and mapping to historical profitability.
+* **Label Propagation Smoothing:** Configurable min_holding_period to smooth raw labels and filter out noise.
+* **Input Validation:** Checks for required OHLCV/features.
+* **Extensible Design:** Easily add new strategies via BaseLabelingStrategy.
 
 ---
 
 ## **Installation**
 
 1. **Clone the repository:**
-    ```sh
-    git clone https://github.com/DimitriKenne/CryptoFutureBot.git
-    cd CryptoFutureBot
-    ```
+   ```sh
+   git clone https://github.com/DimitriKenne/CryptoFutureBot.git
+   cd CryptoFutureBot
+   ```
 
 2. **Create a virtual environment (recommended):**
-    ```sh
-    python -m venv .venv
-    # On Windows:
-    .venv\Scripts\activate
-    # On Linux/Mac:
-    source .venv/bin/activate
-    ```
+   ```sh
+   python -m venv .venv
+   # On Windows:
+   .venv\Scripts\activate
+   # On Linux/Mac:
+   source .venv/bin/activate
+   ```
 
 3. **Install dependencies:**
-    ```sh
-    pip install -r requirements.txt
-    ```
-    *Note: For TA-Lib issues, use the provided wheel for Windows or consult TA-Lib docs for other OS.*
+   ```sh
+   pip install -r requirements.txt
+   ```
+   *Note: For TA-Lib issues, use the provided wheel for Windows or consult TA-Lib docs for other OS.*
 
 4. **Set up environment variables:**
-    Create a `.env` file in the project root:
-    ```
-    BINANCE_API_KEY="YOUR_BINANCE_API_KEY"
-    BINANCE_API_SECRET="YOUR_BINANCE_API_SECRET"
-    TELEGRAM_ENABLED=True
-    TELEGRAM_BOT_TOKEN="YOUR_TELEGRAM_BOT_TOKEN"
-    TELEGRAM_CHAT_ID="YOUR_TELEGRAM_CHAT_ID"
-    ```
-    Add other credentials as needed.
+   Create a `.env` file in the project root:
+   ```
+   BINANCE_API_KEY="YOUR_BINANCE_API_KEY"
+   BINANCE_API_SECRET="YOUR_BINANCE_API_SECRET"
+   TELEGRAM_ENABLED=True
+   TELEGRAM_BOT_TOKEN="YOUR_TELEGRAM_BOT_TOKEN"
+   TELEGRAM_CHAT_ID="YOUR_TELEGRAM_CHAT_ID"
+   ```
+   Add other credentials as needed.
 
 ---
 
 ## **Configuration**
 
-All core parameters are managed in `config/params.py`. Review and adjust settings before running scripts or the bot:
+All core parameters are now defined and managed within dedicated configuration schema files in the config/ directory. These dataclass-based schemas provide structure, default values, and validation for different aspects of the project. Review and adjust settings in these files as needed before running scripts or the bot:
 
-- `GENERAL_CONFIG`
-- `EXCHANGE_CONFIG`
-- `FEATURE_CONFIG` (detailed in `config/feature_config_schema.py`)
-- `LABELING_CONFIG`
-- `MODEL_CONFIG`
-- `STRATEGY_CONFIG`
+* config/params.py (Central import hub for all schemas)
+* config/general_config_schema.py
+* config/exchange_config_schema.py
+* config/feature_config_schema.py
+* config/label_config_schema.py
+* config/model_config_schema.py
+* config/strategy_config_schema.py
+* config/notifier_config_schema.py
 
 ---
 
 ## **Usage**
 
-The `scripts/` directory contains utility scripts for workflow automation. Example usage:
+The scripts/ directory contains utility scripts for workflow automation. Example usage:
 
 ### **trading_bot.py**
 
@@ -297,9 +302,10 @@ python -m scripts.generate_features --symbol ADAUSDT --interval 5m
 
 Generate labels for model training:
 ```sh
-python scripts/create_labels.py --symbol BTCUSDT --interval 1h --label-strategy net_forward_return_quantile
-python scripts/create_labels.py --symbol ADAUSDT --interval 5m --label-strategy future_range_dominance
-python scripts/create_labels.py --symbol ADAUSDT --interval 15m --label-strategy triple_barrier
+python scripts/create_labels.py --symbol BTCUSDT --interval 1h --label-strategy strategy_2
+python scripts/create_labels.py --symbol ADAUSDT --interval 5m --label-strategy strategy_3
+python scripts/create_labels.py --symbol ADAUSDT --interval 15m --label-strategy strategy_1
+python scripts/create_labels.py --symbol ETHUSDT --interval 1h --label-strategy strategy_4
 ```
 
 ---
@@ -361,8 +367,8 @@ python scripts/analyze_results.py --symbol BTCUSDT --interval 1h --model_type xg
 
 Analyze generated trading labels:
 ```sh
-python scripts/analyze_labels.py --symbol ADAUSDT --interval 5m
-python scripts/analyze_labels.py --symbol BTCUSDT --interval 1h --future-horizons 10 30 60
+python scripts/analyze_labels.py --symbol ADAUSDT --interval 5m --label-strategy strategy_2
+python scripts/analyze_labels.py --symbol BTCUSDT --interval 1h --label-strategy strategy_1 --future-horizons 10 30 60
 ```
 
 ---

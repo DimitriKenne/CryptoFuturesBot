@@ -21,51 +21,46 @@ class BaseLabelingStrategy(ABC):
     strategies interchangeably.
     """
 
-    def __init__(self, config: Dict[str, Any], logger: logging.Logger):
+    def __init__(self, config: Any, logger: logging.Logger, trading_fee_rate: float, slippage_tolerance_pct: float):
         """
         Initializes the base labeling strategy with common parameters.
 
         Args:
-            config (Dict[str, Any]): The configuration dictionary for the strategy.
-                                     This will typically be a subset of LABELING_CONFIG
-                                     from config.params.
+            config (Any): The specific configuration object (dataclass instance) for the strategy.
+                          This will be like Strategy1Config, Strategy2Config etc.
             logger (logging.Logger): A logger instance for logging messages specific
                                      to this strategy.
+            trading_fee_rate (float): The transaction fee rate to apply to calculations.
+            slippage_tolerance_pct (float): The estimated slippage rate to apply to calculations.
         """
-        # Removed super().__init__(config, logger) as object.__init__ takes no args
         self.config = config
         self.logger = logger
-        self.logger.debug(f"BaseLabelingStrategy initialized with config: {self.config}")
+        self.trading_fee_rate = trading_fee_rate
+        self.slippage_tolerance_pct = slippage_tolerance_pct
+        
+        self.logger.debug(f"BaseLabelingStrategy initialized for {self.__class__.__name__}.")
+        self.logger.debug(f"  Trading Fee Rate: {self.trading_fee_rate}")
+        self.logger.debug(f"  Slippage Tolerance: {self.slippage_tolerance_pct}")
 
-        self._validate_common_config()
-
-    def _validate_common_config(self):
-        """
-        Validates common configuration parameters that all strategies might expect.
-        Concrete strategies should override or extend this for their specific parameters.
-        """
-        # No common parameters directly validated here as strategies only produce raw labels.
-        # Specific strategies will validate their own parameters.
-        pass
 
     @abstractmethod
     def calculate_raw_labels(self, df: pd.DataFrame) -> pd.DataFrame:
         """
-        Abstract method to calculate raw trading labels (1, -1, or 0) for the input DataFrame.
-        This method should NOT apply any label propagation or smoothing.
-        It should focus solely on the core logic of the specific labeling strategy.
+        Calculates raw trading labels (1 for Buy, -1 for Sell, 0 for Neutral)
+        based on the specific logic of the strategy.
+
+        This method should NOT apply label propagation; that is handled by LabelGenerator.
+        The DataFrame returned should contain at least a 'label' column and
+        maintain the original DatetimeIndex.
 
         Args:
-            df (pd.DataFrame): DataFrame with OHLCV data and required features,
-                               indexed by time. Must include 'open', 'high', 'low', 'close'.
-                               Assumed to be cleaned (no NaNs in OHLCV) by LabelGenerator.
+            df (pd.DataFrame): Input DataFrame with OHLCV data and any necessary
+                               features that the strategy relies upon.
+                               Must have a DatetimeIndex.
 
         Returns:
-            pd.DataFrame: A DataFrame with at least the original index and a 'label' column
-                          containing the raw labels (1, -1, 0). Other columns may be preserved
-                          or dropped as needed by the strategy.
-                          IMPORTANT: The returned DataFrame MUST have a DatetimeIndex
-                                     that matches the input df's index.
+            pd.DataFrame: A DataFrame with the raw 'label' column and the same index
+                                     as the input df.
         Raises:
             ValueError: If input DataFrame is missing required columns or features for this strategy.
         """
@@ -77,11 +72,13 @@ class BaseLabelingStrategy(ABC):
         Checks for DatetimeIndex and presence of required columns.
         """
         if not isinstance(df.index, pd.DatetimeIndex):
+            self.logger.error("Input DataFrame must have a DatetimeIndex.")
             raise ValueError("Input DataFrame must have a DatetimeIndex.")
 
         if required_cols:
             missing_cols = [col for col in required_cols if col not in df.columns]
             if missing_cols:
+                self.logger.error(f"Input DataFrame is missing required columns for this strategy: {missing_cols}")
                 raise ValueError(f"Input DataFrame is missing required columns for this strategy: {missing_cols}")
 
         # Check for NaNs in critical OHLCV columns (already done by LabelGenerator, but good for robustness)
