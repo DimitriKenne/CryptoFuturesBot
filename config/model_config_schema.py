@@ -105,6 +105,17 @@ class ModelConfig:
     """
     Defines configuration parameters for model training.
     """
+    # Define a class-level attribute for available model types
+    AVAILABLE_MODEL_TYPES: Dict[str, str] = field(
+        default_factory=lambda: {
+            'xgboost': 'XGBoost Classifier',
+            'random_forest': 'Random Forest Classifier',
+            'lstm': 'LSTM Neural Network'
+        },
+        init=False, # This field is not part of the constructor
+        repr=False  # Do not include in string representation
+    )
+
     model_type: Literal['xgboost', 'random_forest', 'lstm'] = 'xgboost'
     features_to_use: Optional[List[str]] = None # List of feature names to use, or None for all generated features
     label_column: str = 'label' # Name of the target variable column
@@ -129,8 +140,8 @@ class ModelConfig:
     random_forest_tuning_params: RandomForestTuningParams = field(default_factory=RandomForestTuningParams)
 
     def __post_init__(self):
-        if self.model_type not in ['xgboost', 'random_forest', 'lstm']:
-            raise ValueError("model_type must be 'xgboost', 'random_forest', or 'lstm'.")
+        if self.model_type not in self.AVAILABLE_MODEL_TYPES: # Validate against the new class attribute
+            raise ValueError(f"model_type must be one of {list(self.AVAILABLE_MODEL_TYPES.keys())}.")
         if self.features_to_use is not None and not isinstance(self.features_to_use, list):
             raise TypeError("features_to_use must be a list of strings or None.")
         if not isinstance(self.label_column, str) or not self.label_column:
@@ -154,4 +165,3 @@ class ModelConfig:
 
 # Default configuration instance
 DEFAULT_MODEL_CONFIG = ModelConfig()
-

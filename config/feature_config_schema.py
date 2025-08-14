@@ -61,6 +61,9 @@ class FeatureConfig:
     volume_oscillator_long_ema: int = 10
     volume_threshold: float = 20.0 # Threshold for volume oscillator for breakout confirmation
 
+    # New: Column name for the volatility regime feature created by FeatureEngineer
+    volatility_regime_col_name: str = "volatility_regime" # Added this line
+
     # Temporal Safety Validation (for detecting lookahead bias during feature engineering)
     temporal_validation: TemporalValidationConfig = field(default_factory=TemporalValidationConfig)
 

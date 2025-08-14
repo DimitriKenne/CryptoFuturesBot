@@ -1,7 +1,7 @@
 # config/backtest_config_schema.py
 
 from dataclasses import dataclass, field
-from typing import Dict, Any, Optional
+from typing import Dict, Any, Optional, Literal # Import Literal for type hinting choices
 
 @dataclass
 class BacktestConfig:
@@ -12,11 +12,18 @@ class BacktestConfig:
     maintenance_margin_rate: float = 0.005  # Estimated maintenance margin rate for liquidation calculation (e.g., 0.005 = 0.5%).
     liquidation_fee_rate: float = 0.0005    # Specific fee rate applied on simulated liquidation (defaults to trading_fee_rate if omitted, but explicit here).
     max_concurrent_trades: int = 1          # Maximum simultaneous open trades allowed during backtest. (Currently only 1 is fully supported for simplicity).
+    
+    # New: Backtest Mode
+    backtest_mode: Literal['full', 'train', 'test'] = 'test' # Mode for data splitting in backtesting
 
     # Reporting Flags
     save_trades: bool = True                # Whether to save detailed trade logs to file.
     save_equity_curve: bool = True          # Whether to save equity curve data to file.
     save_metrics: bool = True               # Whether to save summary performance metrics to file.
+    
+    # Monte Carlo Backtesting Parameters
+    monte_carlo_iterations: int = 1000      # Number of Monte Carlo iterations for robustness testing.
+    monte_carlo_seed: Optional[int] = None  # Seed for reproducibility of Monte Carlo simulations. If None, will use a random seed.
 
     # Strategy Overrides for Backtesting (Optional)
     # This dictionary allows users to override specific parameters from StrategyConfig
@@ -34,6 +41,8 @@ class BacktestConfig:
             raise ValueError("liquidation_fee_rate must be a non-negative number.")
         if not isinstance(self.max_concurrent_trades, int) or self.max_concurrent_trades <= 0:
             raise ValueError("max_concurrent_trades must be a positive integer.")
+        if self.backtest_mode not in ['full', 'train', 'test']: # Validate the new backtest_mode
+            raise ValueError("backtest_mode must be 'full', 'train', or 'test'.")
         if not isinstance(self.save_trades, bool):
             raise TypeError("save_trades must be a boolean.")
         if not isinstance(self.save_equity_curve, bool):

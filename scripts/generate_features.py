@@ -26,12 +26,8 @@ sys.path.insert(0, str(PROJECT_ROOT))
 
 # Import configuration and utilities
 try:
-    # Import FeatureConfig and its DEFAULT_FEATURE_CONFIG instance
-    from config.feature_config_schema import FeatureConfig, DEFAULT_FEATURE_CONFIG
-    # Import GeneralConfig and its DEFAULT_GENERAL_CONFIG instance
-    from config.general_config_schema import GeneralConfig, DEFAULT_GENERAL_CONFIG
-    # Import StrategyConfig and its DEFAULT_STRATEGY_CONFIG instance
-    from config.strategy_config_schema import StrategyConfig, DEFAULT_STRATEGY_CONFIG
+    # Changed: Import the global app_config instance directly
+    from config.params import app_config
 
     from config.paths import PATHS
 
@@ -80,47 +76,41 @@ def generate_features_pipeline(symbol: str, interval: str):
     logger.info(f"Starting feature generation pipeline for {symbol} {interval}...")
 
     # --- 1. Load and Configure Feature Engineering Parameters ---
-    # Start with a deep copy of the default FeatureConfig instance
-    feature_config = copy.deepcopy(DEFAULT_FEATURE_CONFIG)
-    # Start with a deep copy of the default StrategyConfig instance (to get overrides)
-    strategy_config = copy.deepcopy(DEFAULT_STRATEGY_CONFIG)
-    # Start with a deep copy of the default GeneralConfig instance
-    general_config = copy.deepcopy(DEFAULT_GENERAL_CONFIG)
+    # Changed: Create a mutable copy of the FeatureConfig from the global app_config
+    # to apply any runtime overrides from strategy config.
+    final_feature_config = copy.deepcopy(app_config.features)
 
-
-    # Apply overrides from StrategyConfig to feature_config where applicable
-    # Specifically, `sequence_length_bars` and `temporal_validation` might be influenced by strategy.
-    # We should merge these carefully. For nested objects like temporal_validation, we need to merge
-    # their attributes individually or create a new instance if the structure needs changing.
-
-    # Override sequence_length_bars in feature_config if defined in strategy_config
-    if hasattr(strategy_config, 'sequence_length_bars') and strategy_config.sequence_length_bars is not None:
-        feature_config.sequence_length_bars = strategy_config.sequence_length_bars
-        logger.info(f"Overriding feature_config.sequence_length_bars with strategy_config.sequence_length_bars: {feature_config.sequence_length_bars}")
+    # Apply overrides from StrategyConfig to final_feature_config where applicable
+    # Directly access attributes of app_config.strategy
+    if app_config.strategy.model_prediction_lookback_bars is not None:
+        final_feature_config.sequence_length_bars = app_config.strategy.model_prediction_lookback_bars
+        logger.info(f"Overriding final_feature_config.sequence_length_bars with strategy_config.model_prediction_lookback_bars: {final_feature_config.sequence_length_bars}")
     
-    # Override temporal_validation settings if strategy_config defines them
-    if hasattr(strategy_config, 'temporal_validation_enabled') and strategy_config.temporal_validation_enabled is not None:
-        feature_config.temporal_validation.enabled = strategy_config.temporal_validation_enabled
-        logger.info(f"Overriding feature_config.temporal_validation.enabled with strategy_config.temporal_validation_enabled: {feature_config.temporal_validation.enabled}")
+    # Assuming temporal_validation_enabled might be a direct attribute of StrategyConfig
+    # if it needs to override FeatureConfig's temporal validation.
+    # If not, this block can be removed or adapted based on your specific StrategyConfig design.
+    if app_config.strategy.temporal_validation_enabled is not None: # This attribute might need to be added to StrategyConfig if it's meant to override.
+        final_feature_config.temporal_validation.enabled = app_config.strategy.temporal_validation_enabled
+        logger.info(f"Overriding final_feature_config.temporal_validation.enabled with strategy_config.temporal_validation_enabled: {final_feature_config.temporal_validation.enabled}")
     
-    # You could also add more granular overrides for warning/error thresholds from strategy_config if desired
-    # For example:
-    # if hasattr(strategy_config, 'temporal_validation_warning_threshold'):
-    #     feature_config.temporal_validation.warning_correlation_threshold = strategy_config.temporal_validation_warning_threshold
-    # if hasattr(strategy_config, 'temporal_validation_error_threshold'):
-    #     feature_config.temporal_validation.error_correlation_threshold = strategy_config.temporal_validation_error_threshold
+    # You can add more granular overrides here if strategy_config defines them
+    # For example, if strategy_config had:
+    # `temporal_validation_warning_threshold: Optional[float] = None`
+    # You would do:
+    # if app_config.strategy.temporal_validation_warning_threshold is not None:
+    #     final_feature_config.temporal_validation.warning_correlation_threshold = app_config.strategy.temporal_validation_warning_threshold
 
-
-    logger.info(f"Final feature engineering configuration: {feature_config}")
-    logger.info(f"Using general configuration: {general_config}")
-    logger.info(f"Using strategy configuration (for relevant parameters): {strategy_config}")
+    logger.info(f"Final feature engineering configuration: {final_feature_config}")
+    # Changed: Directly access general and strategy configs from the global app_config
+    logger.info(f"Using general configuration: {app_config.general}")
+    logger.info(f"Using strategy configuration (for relevant parameters): {app_config.strategy}")
 
 
     # --- 2. Initialize DataManager and FeaturesEngineer ---
     dm = DataManager()
     try:
-        # Pass the configured FeatureConfig instance directly
-        fe = FeatureEngineer(config=feature_config)
+        # Changed: Pass the configured FeatureConfig instance directly
+        fe = FeatureEngineer(config=final_feature_config)
     except Exception as e:
         logger.error(f"An unexpected error occurred initializing FeatureEngineer: {e}", exc_info=True)
         sys.exit(1)

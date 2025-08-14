@@ -28,6 +28,13 @@ class ExchangeConfig:
     timeout: int = 30000 # API call timeout in milliseconds
     tld: Literal['com', 'us'] = field(default_factory=lambda: os.getenv('BINANCE_TLD', 'com')) # 'com' for international, 'us' for Binance.us
 
+    # NEW: Price and Quantity Precision and Minimums (Crucial for Order Management)
+    price_precision: int = 4 # Number of decimal places for prices (e.g., 4 for ADAUSDT)
+    quantity_precision: int = 2 # Number of decimal places for quantities (e.g., 2 for ADAUSDT)
+    min_quantity: float = 1.0 # Minimum order quantity for the symbol (e.g., 1.0 ADA)
+    min_notional: float = 5.0 # Minimum order notional value in USDT (e.g., 5.0 USDT)
+
+
     def __post_init__(self):
         if self.exchange not in ['binance']:
             raise ValueError("Unsupported exchange. Currently only 'binance' is supported.")
@@ -54,6 +61,16 @@ class ExchangeConfig:
         if self.exchange == 'binance':
             if not self.api_key or not self.api_secret:
                 logger.warning("Binance API Key or Secret is missing but required for the selected exchange type. Trading operations may fail.")
+        
+        # New validations for precision and minimums
+        if not isinstance(self.price_precision, int) or self.price_precision < 0:
+            raise ValueError("price_precision must be a non-negative integer.")
+        if not isinstance(self.quantity_precision, int) or self.quantity_precision < 0:
+            raise ValueError("quantity_precision must be a non-negative integer.")
+        if not isinstance(self.min_quantity, (int, float)) or self.min_quantity < 0:
+            raise ValueError("min_quantity must be a non-negative number.")
+        if not isinstance(self.min_notional, (int, float)) or self.min_notional < 0:
+            raise ValueError("min_notional must be a non-negative number.")
 
 
 # Default configuration instance
