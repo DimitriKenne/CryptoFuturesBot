@@ -4,6 +4,12 @@ import pandas as pd
 import talib
 import numpy as np
 import logging
+from pathlib import Path
+import sys
+
+# Add project root to Python path for imports
+PROJECT_ROOT = Path(__file__).parent.parent.parent.parent
+sys.path.append(str(PROJECT_ROOT))
 
 # Import the 'ta' library indicators directly
 from ta.momentum import RSIIndicator, StochasticOscillator, AwesomeOscillatorIndicator
@@ -13,10 +19,12 @@ from ta.volume import OnBalanceVolumeIndicator, ChaikinMoneyFlowIndicator, MFIIn
 
 logger = logging.getLogger(__name__)
 
-# Define FLOAT_EPSILON for robust floating-point comparisons, consistent with FeatureEngineer
-# FLOAT_EPSILON = 1e-9
 # Import FLOAT_EPSILON from the central constants file (config.params)
-from config.params import FLOAT_EPSILON
+try:
+    from config.params import FLOAT_EPSILON
+except ImportError as e:
+    logger.error(f"Failed to import FLOAT_EPSILON from config.params: {e}")
+    FLOAT_EPSILON = 1e-9
 
 class TechnicalIndicatorCalculator:
     """

@@ -83,7 +83,7 @@ LIVE_TRADING_METRICS_PATTERN = "{symbol}_{interval}_{model_type}_metrics.json"
 LIVE_TRADING_CAPITAL_STATE_PATTERN = "{symbol}_{interval}_{model_type}_capital_state.json" # For bot state
 
 # Analysis Output Patterns (within analysis subdirectories)
-LABELING_STRATEGY_ANALYSIS_DIR_PATTERN_STR = str(LABELING_ANALYSIS_BASE_DIR / "{label_strategy}") # New pattern for strategy-specific subfolders
+LABELING_STRATEGY_ANALYSIS_DIR_PATTERN_STR = str(LABELING_ANALYSIS_BASE_DIR / "{labeling_strategy}") # New pattern for strategy-specific subfolders
 LABELING_ANALYSIS_PLOT_PATTERN = "{symbol}_{interval}_{analysis_type}.png" # Updated to remove strategy from filename
 LABELING_ANALYSIS_TABLE_PATTERN = "{symbol}_{interval}_{analysis_type}.csv" # Updated to remove strategy from filename
 

@@ -7,7 +7,7 @@ from sklearn.ensemble import RandomForestClassifier
 from xgboost import XGBClassifier
 
 # Relative import for config schema, as it's outside the 'training' package
-from config.model_config_schema import LSTMParams, RandomForestParams, XGBoostParams
+from config.model import LSTMParams, RandomForestParams, XGBoostParams
 
 # TF_AVAILABLE and tf should be passed in the constructor.
 # No direct import here.

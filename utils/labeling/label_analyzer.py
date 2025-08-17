@@ -11,8 +11,8 @@ from typing import Dict, Any, Optional, Tuple, List
 # Set up a module-level logger
 logger = logging.getLogger(__name__)
 
-# Define FLOAT_EPSILON for robust floating-point comparisons
-FLOAT_EPSILON = 1e-9
+from config.params import app_config, FLOAT_EPSILON
+from config.label import LabelConfig
 
 class LabelAnalyzer:
     """
@@ -20,7 +20,15 @@ class LabelAnalyzer:
     Results (plots and tables) are saved to strategy-specific subfolders.
     """
 
-    def __init__(self, paths: Dict[str, Any], logger: logging.Logger, fee: float, slippage: float, f_window: int):
+    def __init__(
+        self,
+        paths: Dict[str, Any],
+        logger: Optional[logging.Logger] = None,
+        fee: Optional[float] = None,
+        slippage: Optional[float] = None,
+        f_window: Optional[int] = None,
+        labeling_strategy_type: Optional[str] = None,
+    ):
         """
         Initializes the LabelAnalyzer.
 
@@ -33,13 +41,26 @@ class LabelAnalyzer:
                             This will be used as the maximum holding period for MFE/MAE and streak analysis.
         """
         self.paths = paths
-        self.logger = logger
-        self.fee = fee
-        self.slippage = slippage
-        self.f_window = f_window # Store f_window here
-        self.logger.info(f"LabelAnalyzer initialized with fee={self.fee}, slippage={self.slippage}, and f_window={self.f_window}.")
+        self.logger = logger if logger is not None else logging.getLogger(__name__)
 
-        # Ensure required patterns are available
+        # Get labeling config from global app_config
+        labeling_config: LabelConfig = app_config.labeling
+
+        # Use config values, allow override by arguments
+        self.fee = fee if fee is not None else labeling_config.trading_fee_rate
+        self.slippage = slippage if slippage is not None else labeling_config.slippage_tolerance_pct
+
+        # Determine labeling strategy type
+        self.labeling_strategy_type = (
+            labeling_strategy_type if labeling_strategy_type is not None
+            else labeling_config.labeling_strategy_type
+        )
+
+        # Get the strategy config object and f_window
+        strategy_config_obj = getattr(labeling_config, self.labeling_strategy_type)
+        self.f_window = f_window if f_window is not None else getattr(strategy_config_obj, "future_return_window", 150)
+
+        # Patterns for saving analysis results
         self.plot_pattern = self.paths.get("labeling_analysis_plot_pattern")
         self.table_pattern = self.paths.get("labeling_analysis_table_pattern")
         self.strategy_dir_pattern_str = self.paths.get("labeling_strategy_analysis_dir_pattern")
@@ -920,7 +941,13 @@ class LabelAnalyzer:
         self.logger.info("Volatility Regime Net Profitability Analysis complete.")
 
 
-    def perform_all_analyses(self, df_combined: pd.DataFrame, symbol: str, interval: str, label_strategy: str, future_horizons: List[int]):
+    def perform_all_analyses(
+        self, 
+        df_combined: pd.DataFrame, 
+        symbol: str, 
+        interval: str, 
+        labeling_strategy: str, 
+        future_horizons: List[int]):
         """
         Orchestrates all label analyses and saves results to a strategy-specific folder.
 
@@ -931,10 +958,10 @@ class LabelAnalyzer:
             label_strategy (str): The name of the labeling strategy being analyzed.
             future_horizons (List[int]): List of future horizons for return analysis.
         """
-        self.logger.info(f"Performing all analyses for {symbol} {interval} with strategy '{label_strategy}'...")
+        self.logger.info(f"Performing all analyses for {symbol} {interval} with strategy '{labeling_strategy}'...")
 
         # Dynamically create the strategy-specific analysis directory
-        analysis_output_dir = Path(self.strategy_dir_pattern_str.format(label_strategy=label_strategy))
+        analysis_output_dir = Path(self.strategy_dir_pattern_str.format(labeling_strategy=labeling_strategy))
         try:
             analysis_output_dir.mkdir(exist_ok=True, parents=True)
             self.logger.info(f"Ensured analysis results directory exists: {analysis_output_dir}")
@@ -966,4 +993,4 @@ class LabelAnalyzer:
         # 4. Volatility Regime Profitability Analysis
         self.analyze_regime_profitability(df_combined.copy(), symbol, interval, analysis_output_dir, future_horizons)
 
-        self.logger.info(f"All analyses completed for {symbol} {interval} with strategy '{label_strategy}'.")
+        self.logger.info(f"All analyses completed for {symbol} {interval} with strategy '{labeling_strategy}'.")

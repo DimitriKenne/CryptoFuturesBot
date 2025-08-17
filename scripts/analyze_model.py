@@ -63,7 +63,7 @@ sys.path.insert(0, str(PROJECT_ROOT))
 try:
     from config.paths import PATHS
     from config.params import app_config # Use app_config as the central config object
-    from utils.data_manager import DataManager
+    from utils.data_management.data_manager import DataManager
     from utils.logger_config import setup_rotating_logging
     from utils.training.model_trainer import ModelTrainer
     from utils.exceptions import TemporalSafetyError, ModelAnalysisError
@@ -235,8 +235,10 @@ def plot_probability_histograms(y_true: pd.Series, y_proba: np.ndarray, classes:
         logger.warning(f"Insufficient data or incorrect shape for probability histogram plotting. y_true_shape: {y_true.shape}, y_proba_shape: {y_proba.shape}, classes_len: {len(classes)}.")
         return
 
+    # Standardize probability column names
+    proba_colnames = [f"proba_{lbl}" for lbl in classes]
     y_true_df = y_true.to_frame(name='true_label')
-    proba_df = pd.DataFrame(y_proba, index=y_true_df.index, columns=classes)
+    proba_df = pd.DataFrame(y_proba, index=y_true_df.index, columns=proba_colnames)
     merged_df = pd.concat([y_true_df, proba_df], axis=1)
 
     if merged_df.empty:
@@ -248,16 +250,9 @@ def plot_probability_histograms(y_true: pd.Series, y_proba: np.ndarray, classes:
         axes = [axes]
 
     for i, class_label in enumerate(classes):
-        if i >= proba_df.shape[1]: # Ensure the probability column exists
-            logger.warning(f"Probability column for class {class_label} (index {i}) not found in y_proba_df. Skipping plot for this class.")
-            continue
-
-        proba_column = classes[i] # Use the actual class label as column name
-
+        proba_column = proba_colnames[i]
         subset_data = merged_df[[proba_column, 'true_label']].dropna()
         if subset_data.empty:
-            logger.warning(f"Skipping probability histogram for class {class_label}: No non-NaN probability data or true labels.")
-            # Set up empty plot for visual consistency
             axes[i].set_title(f'Probabilities for Class {class_label}\n(No Data)')
             axes[i].set_xlabel(f'Predicted Probability ({class_label})')
             axes[i].set_ylabel('Density')
@@ -298,12 +293,11 @@ def plot_roc_auc(y_true: pd.Series, y_proba: np.ndarray, classes: list, output_d
         logger.warning(f"Skipping ROC AUC plot: Need at least two unique classes in true labels. Found: {unique_true_classes}")
         return
 
+    proba_colnames = [f"proba_{lbl}" for lbl in classes]
     sorted_classes = sorted(classes)
     y_true_clean = y_true.dropna()
-
-    # Ensure y_proba_clean aligns with y_true_clean's index, and only take the values
-    y_proba_df_temp = pd.DataFrame(y_proba, index=y_true.index, columns=sorted_classes)
-    y_proba_clean = y_proba_df_temp.loc[y_true_clean.index].values
+    y_proba_df_temp = pd.DataFrame(y_proba, index=y_true.index, columns=proba_colnames)
+    y_proba_clean = y_proba_df_temp.loc[y_true_clean.index][proba_colnames].values
 
     if y_true_clean.empty or y_proba_clean.shape[0] == 0:
         logger.warning("Skipping ROC AUC plot: No non-NaN data points after cleaning true labels or probabilities.")
@@ -327,11 +321,9 @@ def plot_roc_auc(y_true: pd.Series, y_proba: np.ndarray, classes: list, output_d
             fpr[i], tpr[i], roc_auc[i] = None, None, None
 
     plt.figure(figsize=(8, 6))
-
     for i, class_label in enumerate(sorted_classes):
         if roc_auc.get(i) is not None:
             plt.plot(fpr[i], tpr[i], label=f'ROC curve of class {class_label} (area = {roc_auc[i]:0.2f})')
-
     plt.plot([0, 1], [0, 1], 'k--', label='Chance')
     plt.xlim([0.0, 1.0])
     plt.ylim([0.0, 1.05])
@@ -340,7 +332,6 @@ def plot_roc_auc(y_true: pd.Series, y_proba: np.ndarray, classes: list, output_d
     plt.title(f'Receiver Operating Characteristic (ROC) Curve\n{symbol.upper()} {interval} ({model_key.replace("_", " ").title()})')
     plt.legend(loc="lower right")
     plt.tight_layout()
-
     safe_interval = interval.replace(':', '_')
     roc_auc_plot_path = output_dir / f"{symbol.upper()}_{safe_interval}_{model_key}_roc_auc_curve.png"
     try:
@@ -367,10 +358,11 @@ def plot_precision_recall_curve(y_true: pd.Series, y_proba: np.ndarray, classes:
         logger.warning(f"Skipping Precision-Recall plot: Need at least two unique classes in true labels. Found: {unique_true_classes}")
         return
 
+    proba_colnames = [f"proba_{lbl}" for lbl in classes]
     sorted_classes = sorted(classes)
     y_true_clean = y_true.dropna()
-    y_proba_df_temp = pd.DataFrame(y_proba, index=y_true.index, columns=sorted_classes)
-    y_proba_clean = y_proba_df_temp.loc[y_true_clean.index].values
+    y_proba_df_temp = pd.DataFrame(y_proba, index=y_true.index, columns=proba_colnames)
+    y_proba_clean = y_proba_df_temp.loc[y_true_clean.index][proba_colnames].values
 
     if y_true_clean.empty or y_proba_clean.shape[0] == 0:
         logger.warning("Skipping Precision-Recall plot: No non-NaN data points after cleaning true labels or probabilities.")
@@ -434,10 +426,11 @@ def plot_calibration_curve(y_true: pd.Series, y_proba: np.ndarray, classes: list
         logger.warning(f"Skipping calibration plot: Need at least two unique classes in true labels. Found: {unique_true_classes}")
         return
 
+    proba_colnames = [f"proba_{lbl}" for lbl in classes]
     sorted_classes = sorted(classes)
     y_true_clean = y_true.dropna()
-    y_proba_df_temp = pd.DataFrame(y_proba, index=y_true.index, columns=sorted_classes)
-    y_proba_clean = y_proba_df_temp.loc[y_true_clean.index].values
+    y_proba_df_temp = pd.DataFrame(y_proba, index=y_true.index, columns=proba_colnames)
+    y_proba_clean = y_proba_df_temp.loc[y_true_clean.index][proba_colnames].values
 
 
     if y_true_clean.empty or y_proba_clean.shape[0] == 0:
@@ -696,7 +689,7 @@ def evaluate_model(trainer: ModelTrainer, X_test: pd.DataFrame, y_test: pd.Serie
 
     # Ensure probabilities DataFrame columns match expected labels if not empty
     if not y_proba_df.empty and y_proba_df.shape[1] == len(all_expected_labels):
-        y_proba_df.columns = all_expected_labels
+        y_proba_df.columns = [f"proba_{lbl}" for lbl in all_expected_labels]
     elif not y_proba_df.empty:
         logger.warning(f"Probability DataFrame has {y_proba_df.shape[1]} columns, but {len(all_expected_labels)} expected labels. Cannot assign column names reliably for plotting.")
 

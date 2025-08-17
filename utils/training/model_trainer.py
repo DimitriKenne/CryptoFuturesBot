@@ -3,6 +3,7 @@
 import logging
 from collections import Counter
 from typing import Dict, Any, Optional, List, Tuple, TYPE_CHECKING, Union
+from dataclasses import fields
 
 import joblib
 import numpy as np
@@ -32,8 +33,8 @@ sys.path.insert(0, str(PROJECT_ROOT))
 try:
     from config.params import app_config, FLOAT_EPSILON
     # ModelConfig now explicitly has TF_AVAILABLE and tf attributes
-    from config.model_config_schema import ModelConfig, LSTMParams, RandomForestParams, XGBoostParams
-    from utils.data_manager import DataManager
+    from config.model import ModelConfig, LSTMParams, RandomForestParams, XGBoostParams
+    from utils.data_management.data_manager import DataManager
 
     # Import the new modular training utilities (relative imports since they are in the same folder now)
     from .preprocessor_builder import PreprocessorBuilder
@@ -133,7 +134,7 @@ class ModelTrainer:
             self.data_sequencer = None
 
         self.dm = DataManager()
-        self.logger.info(f"ModelTrainer initialized for model type: {self.model_type}")
+        # Do NOT log model type here; log it after loading correct config in load()
 
 
     def train(self, X_train: pd.DataFrame, y_train: pd.Series, X_val: Optional[pd.DataFrame] = None, y_val: Optional[pd.Series] = None):
@@ -620,10 +621,9 @@ class ModelTrainer:
             self.logger.info("LSTM probability predictions made.")
             prediction_index = X.index[self.sequence_length - 1:]
 
-            aligned_probabilities_df = pd.DataFrame(np.nan, index=X.index, columns=self.classes.tolist(), dtype=float)
-
+            aligned_probabilities_df = pd.DataFrame(np.nan, index=X.index, columns=['proba_-1', 'proba_0', 'proba_1'], dtype=float)
             if len(y_pred_proba_array) == len(prediction_index):
-                aligned_probabilities_df.loc[prediction_index] = y_pred_proba_array
+                aligned_probabilities_df.loc[prediction_index, :] = y_pred_proba_array
                 self.logger.debug("LSTM probability predictions aligned.")
             else:
                 self.logger.error(f"Mismatch in length between LSTM probability predictions ({len(y_pred_proba_array)}) and aligned input index ({len(prediction_index)}). Probability alignment failed.")
@@ -644,7 +644,7 @@ class ModelTrainer:
                     self.logger.error(f"Probability prediction output length ({len(y_pred_proba_array)}) does not match input length ({len(X.index)}). Prediction failed.")
                     return None
 
-                return pd.DataFrame(y_pred_proba_array, index=X.index, columns=self.classes.tolist())
+                return pd.DataFrame(y_pred_proba_array, index=X.index, columns=['proba_-1', 'proba_0', 'proba_1'])
             else:
                 self.logger.info(f"Model type '{self.model_type}' or its pipeline does not support predict_proba.")
                 return None
@@ -653,30 +653,18 @@ class ModelTrainer:
     def save(self, symbol: str, interval: str, model_key: str):
         """
         Saves the trained model (pipeline or Keras model) and its metadata using DataManager.
-
-        Args:
-            symbol (str): Trading pair symbol.
-            interval (str): Time interval.
-            model_key (str): Key for the model configuration in app_config.model.
-                             Note: The model_key might not directly correspond to a key
-                             in the *old* MODEL_CONFIG dict structure, but rather to
-                             the model_type (e.g., 'xgboost', 'random_forest', 'lstm').
-                             The DataManager uses this to categorize saved models.
-
-        Raises:
-            ValueError: If model_key is invalid or model/preprocessor is not trained.
-            OSError: If there's an error saving files via DataManager.
-            RuntimeError: If no model or preprocessor is available to save.
         """
         if self.model is None and self.pipeline is None:
             raise RuntimeError("No model or pipeline trained/loaded to save.")
-        # Preprocessor is now managed by PreprocessorBuilder, access through its instance
         if self.preprocessor_builder.preprocessor is None:
             raise RuntimeError("Preprocessor is not trained/loaded. Cannot save model.")
 
         self.logger.info(f"Saving trained {self.model_type} model and metadata for {symbol.upper()} {interval} using DataManager...")
 
-        # Prepare metadata dictionary
+        # Filter out non-init fields from ModelConfig before saving
+        model_config_fields = set(f.name for f in fields(ModelConfig) if f.init)
+        filtered_model_config_dict = {k: v for k, v in self._model_config.__dict__.items() if k in model_config_fields}
+
         metadata = {
             'model_type': self.model_type,
             'feature_columns_processed': self.feature_columns_processed,
@@ -684,8 +672,7 @@ class ModelTrainer:
             'label_map': self.label_map,
             'inverse_label_map': self.inverse_label_map,
             'classes': self.classes.tolist(),
-            # Save the full ModelConfig object directly (it's serializable due to dataclasses)
-            'model_config': self._model_config.__dict__, # Convert dataclass to dict for saving
+            'model_config': filtered_model_config_dict,  # Only save valid fields
             'save_timestamp': datetime.now().isoformat(),
         }
 
@@ -762,9 +749,8 @@ class ModelTrainer:
             ValueError: If metadata is missing crucial info.
             ImportError: If TensorFlow is required but not available.
         """
-        self.logger.info(f"Loading trained model for {symbol.upper()} {interval} ({self.model_type}) using DataManager...")
+        self.logger.info(f"Loading trained model for {symbol.upper()} {interval} using DataManager...")
 
-        # --- Load Metadata using DataManager ---
         self.logger.info(f"Loading metadata for model... from {symbol.upper()} {interval} {model_key}")
         try:
             metadata_dict = self.dm.load_model_artifact(
@@ -779,10 +765,12 @@ class ModelTrainer:
             if 'model_config' in metadata_dict and isinstance(metadata_dict['model_config'], dict):
                 loaded_model_config_dict = metadata_dict['model_config']
 
-                # Manually reconstruct nested dataclasses (need to import them here for load)
-                # These imports are here because this is where the dict is converted back to dataclass objects.
-                # Avoids circular imports if these were in the main import block.
-                from config.model_config_schema import (
+                # Filter out non-init fields before reconstructing ModelConfig
+                model_config_fields = set(f.name for f in fields(ModelConfig) if f.init)
+                loaded_model_config_dict = {k: v for k, v in loaded_model_config_dict.items() if k in model_config_fields}
+
+                # Manually reconstruct nested dataclasses
+                from config.model import (
                     LSTMParams, RandomForestParams,
                     XGBoostParams, XGBoostTuningParams, RandomForestTuningParams
                 )
@@ -850,6 +838,9 @@ class ModelTrainer:
             self.logger.error(f"Error loading model metadata via DataManager: {e}", exc_info=True)
             raise RuntimeError(f"Failed to load model metadata: {e}")
 
+
+        # Log the correct model type after loading config from metadata
+        self.logger.info(f"ModelTrainer loaded for model type: {self.model_type}")
 
         # --- Load Model / Pipeline using DataManager ---
         self.logger.info(f"Loading {self.model_type} model artifact...")

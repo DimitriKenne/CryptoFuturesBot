@@ -23,11 +23,9 @@ import logging
 from pathlib import Path
 import pandas as pd
 import numpy as np
-import matplotlib.pyplot as plt
-import seaborn as sns
-from typing import Dict, Any, Optional, Tuple, List
-from dotenv import load_dotenv # Import load_dotenv
-import copy # Import copy for deepcopy
+from typing import Dict, Any, Optional, List
+from dotenv import load_dotenv
+import copy
 
 # --- Load Environment Variables ---
 load_dotenv()
@@ -39,16 +37,18 @@ sys.path.insert(0, str(PROJECT_ROOT))
 # Import configuration and utilities
 try:
     from config.paths import PATHS
-    # Import StrategyConfig and its DEFAULT_STRATEGY_CONFIG instance
-    from config.strategy_config_schema import StrategyConfig, DEFAULT_STRATEGY_CONFIG
-    # Import LabelConfig and its DEFAULT_LABEL_CONFIG instance
-    from config.label_config_schema import LabelConfig, DEFAULT_LABEL_CONFIG, Strategy1Config, Strategy2Config, Strategy3Config, Strategy4Config
-
-    from utils.data_manager import DataManager
-    from utils.labeling.label_analyzer import LabelAnalyzer # Import LabelAnalyzer
+    from config.label import (
+        LabelConfig,
+        DEFAULT_LABEL_CONFIG,
+        LabelingStrategy1Config,
+        LabelingStrategy2Config,
+        LabelingStrategy3Config,
+        LabelingStrategy4Config,
+    )
+    from utils.data_management.data_manager import DataManager
+    from utils.labeling.label_analyzer import LabelAnalyzer
     from utils.logger_config import setup_rotating_logging
-    from utils.labeling.label_generator import LabelGenerator # Import LabelGenerator to get available strategies
-
+    from utils.labeling.label_generator import LabelGenerator
 except ImportError as e:
     print(f"CRITICAL ERROR: Failed to import necessary modules. "
           f"Ensure your project structure and dependencies are correct. Error: {e}", file=sys.stderr)
@@ -71,38 +71,26 @@ except Exception as e:
     logger = logging.getLogger(__name__)
     logger.warning(f"Failed to configure rotating logging: {e}. Using basic stdout logging.", exc_info=True)
 
-
-def analyze_labels_pipeline(symbol: str, interval: str, label_strategy: str, future_horizons: List[int]):
+def analyze_labels_pipeline(symbol: str, interval: str, labeling_strategy: str, future_horizons: List[int]):
     """
     Main pipeline to load processed and labeled data, then perform various analyses.
 
     Args:
         symbol (str): Trading pair symbol (e.g., 'ADAUSDT').
         interval (str): Time interval for candles (e.g., '5m').
-        label_strategy (str): The name of the labeling strategy that generated the labels.
-                              Used for organizing analysis results.
+        labeling_strategy (str): The name of the labeling strategy that generated the labels.
+                                 Used for organizing analysis results.
         future_horizons (List[int]): List of future bars to analyze returns over.
     """
-    logger.info(f"Starting label analysis script for {symbol} {interval} with strategy '{label_strategy}'...")
+    logger.info(f"Starting label analysis script for {symbol} {interval} with labeling strategy '{labeling_strategy}'...")
 
     dm = DataManager()
 
     # --- 1. Load Configuration ---
-    # Start with a deep copy of the default LabelConfig dataclass instance
     label_config = copy.deepcopy(DEFAULT_LABEL_CONFIG)
-    # Start with a deep copy of the default StrategyConfig dataclass instance (to get analysis horizons)
-    strategy_config = copy.deepcopy(DEFAULT_STRATEGY_CONFIG)
-    
-    # Apply command-line override for label_type (for analysis naming consistency)
-    label_config.label_type = label_strategy
-
-    # Apply common parameters from StrategyConfig to label_config
-    label_config.trading_fee_rate = strategy_config.trading_fee_rate
-    label_config.slippage_tolerance_pct = strategy_config.slippage_tolerance_pct
+    label_config.labeling_strategy_type = labeling_strategy
 
     logger.info(f"Label analysis will use configuration: {label_config}")
-    logger.info(f"Label analysis will use strategy configuration (for analysis horizons): {strategy_config}")
-
 
     # --- 2. Load Data ---
     logger.info(f"Loading processed data for {symbol} {interval}...")
@@ -115,7 +103,7 @@ def analyze_labels_pipeline(symbol: str, interval: str, label_strategy: str, fut
         logger.error(f"An error occurred during processed data loading: {e}", exc_info=True)
         sys.exit(1)
 
-    logger.info(f"Loading labeled data for {symbol} {interval} with strategy '{label_strategy}'...")
+    logger.info(f"Loading labeled data for {symbol} {interval} with labeling strategy '{labeling_strategy}'...")
     try:
         df_labeled = dm.load_data(symbol=symbol, interval=interval, data_type='labeled')
         if df_labeled is None or df_labeled.empty:
@@ -158,22 +146,26 @@ def analyze_labels_pipeline(symbol: str, interval: str, label_strategy: str, fut
     # --- 4. Initialize LabelAnalyzer and Perform Analyses ---
     logger.info("Initializing LabelAnalyzer...")
     try:
-        # Use values directly from the configured label_config instance for LabelAnalyzer
         fee_param = label_config.trading_fee_rate
         slippage_param = label_config.slippage_tolerance_pct
-        
-        # Get f_window from the specific strategy config within label_config
-        strategy_config_obj = getattr(label_config, label_config.label_type)
-        f_window_param = getattr(strategy_config_obj, 'future_return_window', 150) # Use a reasonable default
+        strategy_config_obj = getattr(label_config, label_config.labeling_strategy_type)
+        f_window_param = getattr(strategy_config_obj, 'future_return_window', 150)
 
-        analyzer = LabelAnalyzer(paths=PATHS, logger=logger, fee=fee_param, slippage=slippage_param, f_window=f_window_param)
-        logger.info(f"Performing all analyses for {symbol} {interval} with strategy '{label_strategy}'...")
+        analyzer = LabelAnalyzer(
+            paths=PATHS,
+            logger=logger,
+            fee=fee_param,
+            slippage=slippage_param,
+            f_window=f_window_param,
+            labeling_strategy_type=label_config.labeling_strategy_type
+        )
+        logger.info(f"Performing all analyses for {symbol} {interval} with labeling strategy '{labeling_strategy}'...")
 
         analyzer.perform_all_analyses(
             df_combined=df_combined,
             symbol=symbol,
             interval=interval,
-            label_strategy=label_strategy,
+            labeling_strategy=labeling_strategy,
             future_horizons=future_horizons
         )
         logger.info("All selected analyses completed.")
@@ -183,7 +175,6 @@ def analyze_labels_pipeline(symbol: str, interval: str, label_strategy: str, fut
         sys.exit(1)
 
     logger.info(f"Label analysis pipeline for {symbol} {interval} completed.")
-
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(
@@ -203,17 +194,17 @@ if __name__ == "__main__":
         help='Time interval for candles (e.g., 5m, 1h, 1d)'
     )
     parser.add_argument(
-        '--label-strategy',
+        '--labeling-strategy',
         type=str,
         required=True,
-        choices=LabelGenerator.get_available_strategies(), # Dynamically get choices
-        help=f'Labeling strategy used to generate the labels. This is used for organizing analysis results. Available: {", ".join(LabelGenerator.get_available_strategies())}'
+        choices=LabelGenerator.get_available_labeling_strategies(),
+        help=f'Labeling strategy used to generate the labels. This is used for organizing analysis results. Available: {", ".join(LabelGenerator.get_available_labeling_strategies())}'
     )
     parser.add_argument(
         '--future-horizons',
         type=int,
-        nargs='*', # 0 or more arguments
-        default=DEFAULT_STRATEGY_CONFIG.analysis_future_horizons, # Default from StrategyConfig
+        nargs='*',
+        default=[10, 30, 60],
         help='List of future bars (integers) to analyze returns over. E.g., --future-horizons 10 30 60. Defaults to config setting.'
     )
 
@@ -223,11 +214,11 @@ if __name__ == "__main__":
         analyze_labels_pipeline(
             symbol=args.symbol,
             interval=args.interval,
-            label_strategy=args.label_strategy,
+            labeling_strategy=args.labeling_strategy,
             future_horizons=args.future_horizons
         )
     except SystemExit:
-        pass # Prevent traceback on intentional sys.exit() calls
+        pass
     except Exception:
         logger.exception("Label analysis script terminated due to an unhandled error.")
         sys.exit(1)
@@ -236,10 +227,10 @@ if __name__ == "__main__":
     Usage example:
 
     Run all analyses for ADAUSDT 5m data with default future horizons:
-        python scripts/analyze_labels.py --symbol ADAUSDT --interval 5m --label-strategy strategy_2
+        python scripts/analyze_labels.py --symbol ADAUSDT --interval 5m --labeling-strategy labeling_strategy_2
 
     Run analyses for specific horizons (10, 30, 60 bars):
-        python scripts/analyze_labels.py --symbol BTCUSDT --interval 1h --label-strategy strategy_1 --future-horizons 10 30 60
+        python scripts/analyze_labels.py --symbol BTCUSDT --interval 1h --labeling-strategy labeling_strategy_1 --future-horizons 10 30 60
 
     Ensure you have processed data files and a labeled data file (e.g., ADAUSDT_5m_labeled.parquet)
     in your data/ and that config/params.py and config/paths.py are correct.

@@ -6,39 +6,37 @@ from pathlib import Path
 import sys
 
 # Add project root to Python path for imports
-PROJECT_ROOT = Path(__file__).parent.parent.parent # utils/feature_engineering is two levels down from project root
+PROJECT_ROOT = Path(__file__).parent.parent.parent
 sys.path.append(str(PROJECT_ROOT))
 
 try:
     # Import FeatureConfig and DEFAULT_FEATURE_CONFIG (now a dataclass instance)
-    from config.feature_config_schema import FeatureConfig, DEFAULT_FEATURE_CONFIG
+    from config.feature import FeatureConfig, DEFAULT_FEATURE_CONFIG
+    # Import FLOAT_EPSILON from the central constants file (config.params)
+    from config.params import FLOAT_EPSILON, app_config
 except ImportError as e:
-    logging.error(f"Failed to import FeatureConfig from config.feature_config_schema: {e}")
+    logging.error(f"Failed to import FeatureConfig or constants: {e}")
     raise
 
 logger = logging.getLogger(__name__)
 
-# Define FLOAT_EPSILON consistent with FeatureEngineer
-# FLOAT_EPSILON = 1e-9
-# Import FLOAT_EPSILON from the central constants file (config.params)
-from config.params import FLOAT_EPSILON
-
-def generate_feature_names(config: FeatureConfig) -> List[str]:
+def generate_feature_names(config: FeatureConfig = None) -> List[str]:
     """
     Generates a comprehensive list of all feature names that would be produced
     by the FeatureEngineer class based on the provided FeatureConfig.
 
-    This function reflects the naming conventions and feature types implemented
-    in FeatureEngineer, including base technical indicators, custom patterns,
-    pivot points, derived features, lagged features, and differenced features.
-
     Args:
         config (FeatureConfig): An instance of FeatureConfig containing all
-                                parameters for feature engineering.
+                                parameters for feature engineering. If None,
+                                uses app_config.features from central config.
 
     Returns:
         List[str]: A list of strings, where each string is the name of a feature.
     """
+    # Use central config if not provided
+    if config is None:
+        config = app_config.features
+
     feature_names = []
 
     # --- 1. Price Transformations ---
@@ -53,7 +51,7 @@ def generate_feature_names(config: FeatureConfig) -> List[str]:
         feature_names.append(f'stoch_k_{period_k}')
         feature_names.append(f'stoch_d_{period_k}')
 
-    if len(config.ao_periods) == 2:
+    if hasattr(config, "ao_periods") and len(config.ao_periods) == 2:
         feature_names.append('ao')
 
     for period in config.cci_periods:
@@ -91,23 +89,24 @@ def generate_feature_names(config: FeatureConfig) -> List[str]:
     feature_names.append('volume_osc') # Volume Oscillator
 
     # --- 6. Statistical Features ---
-    for period in config.z_score_periods:
-        feature_names.append(f'z_score_{period}')
-    for period in config.adr_periods:
-        feature_names.append(f'adr_{period}')
+    if hasattr(config, "z_score_periods"):
+        for period in config.z_score_periods:
+            feature_names.append(f'z_score_{period}')
+    if hasattr(config, "adr_periods"):
+        for period in config.adr_periods:
+            feature_names.append(f'adr_{period}')
 
     # --- 7. Custom Pattern and FVG Features ---
-    for pattern in config.candlestick_patterns:
-        feature_names.append(f'pattern_{pattern}_signal')
+    if hasattr(config, "candlestick_patterns"):
+        for pattern in config.candlestick_patterns:
+            feature_names.append(f'pattern_{pattern}_signal')
     feature_names.append('fvg')
 
     # --- 8. Pivot Point Features (Standard and Swing) ---
-    # Standard Pivots
     standard_pivot_bases = ['pp', 'r1', 's1', 'r2', 's2', 'r3', 's3']
-    if config.pivot_point_method == 'standard':
+    if getattr(config, "pivot_point_method", None) == 'standard':
         feature_names.extend(standard_pivot_bases)
 
-    # Swing Pivots
     feature_names.extend(['swing_high_pivot', 'swing_low_pivot'])
 
     # --- 9. Derived Features (depend on earlier features) ---
@@ -116,34 +115,32 @@ def generate_feature_names(config: FeatureConfig) -> List[str]:
     feature_names.append('pattern_cluster')
 
     # Normalized distance to Standard Pivots and binary above/below
-    if config.pivot_point_method == 'standard' and config.atr_periods:
+    if getattr(config, "pivot_point_method", None) == 'standard' and config.atr_periods:
         for p_col in standard_pivot_bases:
             feature_names.append(f'dist_to_{p_col}_norm')
             feature_names.append(f'is_above_{p_col}')
             feature_names.append(f'is_below_{p_col}')
     
     # Normalized distance to Swing Pivots and binary above/below
-    if config.atr_periods: # Swing pivots also rely on ATR for normalization
+    if config.atr_periods:
         feature_names.extend([
             'dist_to_swing_high_norm', 'dist_to_swing_low_norm',
             'is_above_swing_high', 'is_below_swing_low'
         ])
 
     # Normalized Support/Resistance Distances (now derived features)
-    if config.atr_periods: # These also rely on ATR for normalization
+    if config.atr_periods:
         for period in config.support_resistance_periods:
-            feature_names.append(f'dist_to_support_{period}') # Raw distance
-            feature_names.append(f'dist_to_resistance_{period}') # Raw distance
-            feature_names.append(f'dist_to_support_norm_{period}') # Normalized distance
-            feature_names.append(f'dist_to_resistance_norm_{period}') # Normalized distance
-    else: # If ATR not configured, raw S/R distances might still be useful
-        for period in config.support_resistance_periods:
-            feature_names.append(f'resistance_{period}') # Base S/R levels
-            feature_names.append(f'support_{period}') # Base S/R levels
-            # These raw distances might still be generated even if not normalized
             feature_names.append(f'dist_to_support_{period}')
             feature_names.append(f'dist_to_resistance_{period}')
-
+            feature_names.append(f'dist_to_support_norm_{period}')
+            feature_names.append(f'dist_to_resistance_norm_{period}')
+    else:
+        for period in config.support_resistance_periods:
+            feature_names.append(f'resistance_{period}')
+            feature_names.append(f'support_{period}')
+            feature_names.append(f'dist_to_support_{period}')
+            feature_names.append(f'dist_to_resistance_{period}')
 
     # --- 10. Breakout Features ---
     feature_names.extend([
@@ -152,14 +149,16 @@ def generate_feature_names(config: FeatureConfig) -> List[str]:
     ])
 
     # --- 11. Lagged Features ---
-    for col_name, lags in config.lagged_features.items():
-        for lag in lags:
-            feature_names.append(f'{col_name}_lag_{lag}')
+    if hasattr(config, "lagged_features"):
+        for col_name, lags in config.lagged_features.items():
+            for lag in lags:
+                feature_names.append(f'{col_name}_lag_{lag}')
 
     # --- 12. Differenced Features ---
-    for col_name, orders in config.differenced_features.items():
-        for order in orders:
-            feature_names.append(f'{col_name}_diff_{order}')
+    if hasattr(config, "differenced_features"):
+        for col_name, orders in config.differenced_features.items():
+            for order in orders:
+                feature_names.append(f'{col_name}_diff_{order}')
 
     # Filter out duplicates (if any) and return
     return sorted(list(set(feature_names)))

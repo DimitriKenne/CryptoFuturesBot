@@ -79,8 +79,8 @@ sys.path.insert(0, str(PROJECT_ROOT))
 try:
     from config.paths import PATHS
     from config.params import app_config
-    from config.model_config_schema import ModelConfig, RandomForestParams, XGBoostParams, LSTMParams
-    from utils.data_manager import DataManager
+    from config.model import ModelConfig, RandomForestParams, XGBoostParams, LSTMParams
+    from utils.data_management.data_manager import DataManager
     from utils.training.model_trainer import ModelTrainer
     from utils.logger_config import setup_rotating_logging
 except ImportError as e:

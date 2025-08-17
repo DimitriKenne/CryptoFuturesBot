@@ -5,7 +5,7 @@ generate_features.py
 Loads raw OHLCV data using DataManager, engineers features using the FeatureEngineer,
 and saves the resulting DataFrame using DataManager.
 
-Uses the updated configuration structure from config/*.py and config/paths.py.
+Uses the updated configuration structure from config/params.py and config/feature_config_schema.py.
 Configures logging using utils/logger_config.py.
 """
 
@@ -14,8 +14,8 @@ import logging
 import sys
 from pathlib import Path
 import pandas as pd
-import copy # Import copy for deep copying config
-from dotenv import load_dotenv # Import load_dotenv
+import copy
+from dotenv import load_dotenv
 
 # --- Load Environment Variables ---
 load_dotenv()
@@ -26,21 +26,16 @@ sys.path.insert(0, str(PROJECT_ROOT))
 
 # Import configuration and utilities
 try:
-    # Changed: Import the global app_config instance directly
-    from config.params import app_config
-
-    from config.paths import PATHS
-
+    # Import the central app_config object and FLOAT_EPSILON
+    from config.params import app_config, FLOAT_EPSILON
     # Import the DataManager
-    from utils.data_manager import DataManager
-    # Import FeatureEngineer from its new location
+    from utils.data_management.data_manager import DataManager
+    # Import FeatureEngineer from its location
     from utils.feature_engineering.feature_engineer import FeatureEngineer
-    # Assuming TemporalSafetyError is defined in a custom exceptions.py file
+    # Import TemporalSafetyError
     from utils.exceptions import TemporalSafetyError
-
     # Import setup_rotating_logging
     from utils.logger_config import setup_rotating_logging
-
 except ImportError as e:
     print(f"CRITICAL ERROR: Failed to import necessary modules: {e}. "
           f"Ensure your project structure and dependencies are correct.", file=sys.stderr)
@@ -48,7 +43,6 @@ except ImportError as e:
 except Exception as e:
     print(f"An unexpected error occurred during initial imports or configuration loading: {e}", file=sys.stderr)
     sys.exit(1)
-
 
 # --- Set up Logging ---
 try:
@@ -64,7 +58,6 @@ except Exception as e:
     logger = logging.getLogger(__name__)
     logger.warning(f"Failed to configure rotating logging: {e}. Using basic stdout logging.", exc_info=True)
 
-
 def generate_features_pipeline(symbol: str, interval: str):
     """
     Main pipeline to load raw OHLCV data, engineer features, and save them.
@@ -75,46 +68,26 @@ def generate_features_pipeline(symbol: str, interval: str):
     """
     logger.info(f"Starting feature generation pipeline for {symbol} {interval}...")
 
-    # --- 1. Load and Configure Feature Engineering Parameters ---
-    # Changed: Create a mutable copy of the FeatureConfig from the global app_config
-    # to apply any runtime overrides from strategy config.
-    final_feature_config = copy.deepcopy(app_config.features)
-
-    # Apply overrides from StrategyConfig to final_feature_config where applicable
-    # Directly access attributes of app_config.strategy
-    if app_config.strategy.model_prediction_lookback_bars is not None:
-        final_feature_config.sequence_length_bars = app_config.strategy.model_prediction_lookback_bars
-        logger.info(f"Overriding final_feature_config.sequence_length_bars with strategy_config.model_prediction_lookback_bars: {final_feature_config.sequence_length_bars}")
-    
-    # Assuming temporal_validation_enabled might be a direct attribute of StrategyConfig
-    # if it needs to override FeatureConfig's temporal validation.
-    # If not, this block can be removed or adapted based on your specific StrategyConfig design.
-    if app_config.strategy.temporal_validation_enabled is not None: # This attribute might need to be added to StrategyConfig if it's meant to override.
-        final_feature_config.temporal_validation.enabled = app_config.strategy.temporal_validation_enabled
-        logger.info(f"Overriding final_feature_config.temporal_validation.enabled with strategy_config.temporal_validation_enabled: {final_feature_config.temporal_validation.enabled}")
-    
-    # You can add more granular overrides here if strategy_config defines them
-    # For example, if strategy_config had:
-    # `temporal_validation_warning_threshold: Optional[float] = None`
-    # You would do:
-    # if app_config.strategy.temporal_validation_warning_threshold is not None:
-    #     final_feature_config.temporal_validation.warning_correlation_threshold = app_config.strategy.temporal_validation_warning_threshold
-
-    logger.info(f"Final feature engineering configuration: {final_feature_config}")
-    # Changed: Directly access general and strategy configs from the global app_config
-    logger.info(f"Using general configuration: {app_config.general}")
-    logger.info(f"Using strategy configuration (for relevant parameters): {app_config.strategy}")
+    # --- 1. Load Feature Engineering Configuration from app_config ---
+    # Use the features section from the central app_config
+    feature_config = copy.deepcopy(app_config.features)
+    # Corrected: Access sequence_length_bars and temporal_validation directly from feature_config
+    # These attributes are part of FeatureConfig itself, not TradingConfig.
+    # We no longer need a separate 'strategy_config' here for overrides.
+    general_config = copy.deepcopy(app_config.general)
 
 
-    # --- 2. Initialize DataManager and FeaturesEngineer ---
+    logger.info(f"Final feature engineering configuration: {feature_config}")
+    logger.info(f"Using general configuration: {general_config}")
+
+
+    # --- 2. Initialize DataManager and FeatureEngineer ---
     dm = DataManager()
     try:
-        # Changed: Pass the configured FeatureConfig instance directly
-        fe = FeatureEngineer(config=final_feature_config)
+        fe = FeatureEngineer(config=feature_config)
     except Exception as e:
         logger.error(f"An unexpected error occurred initializing FeatureEngineer: {e}", exc_info=True)
         sys.exit(1)
-
 
     # --- 3. Load Raw Data ---
     logger.info(f"Attempting to load raw data for {symbol} {interval}...")
@@ -132,8 +105,7 @@ def generate_features_pipeline(symbol: str, interval: str):
     except Exception as e:
         logger.critical(f"Error loading raw data for {symbol} {interval}: {e}", exc_info=True)
         sys.exit(1)
-    
-    # Basic validation of loaded DataFrame
+
     if df_raw.empty:
         logger.critical(f"Loaded raw data for {symbol} {interval} is empty. Cannot generate features.")
         sys.exit(1)
@@ -145,7 +117,7 @@ def generate_features_pipeline(symbol: str, interval: str):
     # --- 4. Generate Features ---
     try:
         logger.info("Generating features...")
-        df_features = fe.process(df_raw) # Call .process() as per your provided feature_engineer.py
+        df_features = fe.process(df_raw)
         logger.info(f"Successfully generated features. Final DataFrame shape: {df_features.shape}")
     except TemporalSafetyError as e:
         logger.critical(f"Temporal safety error during feature generation: {e}", exc_info=True)
@@ -171,7 +143,6 @@ def generate_features_pipeline(symbol: str, interval: str):
 
     logger.info(f"Feature generation pipeline for {symbol} {interval} completed.")
 
-
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(
         description='Generate technical and statistical features from OHLCV data.'
@@ -186,25 +157,22 @@ if __name__ == "__main__":
         '--interval',
         type=str,
         required=True,
-        choices=['1m', '5m', '15m', '30m', '1h', '2h', '4h', '6h', '8h', '12h', '1d', '3d', '1w', '1M'], # Match fetch_data choices
+        choices=['1m', '5m', '15m', '30m', '1h', '2h', '4h', '6h', '8h', '12h', '1d', '3d', '1w', '1M'],
         help='Time interval for candles (e.g., 5m, 1h, 1d)'
     )
 
     args = parser.parse_args()
 
     try:
-        # Call the main feature generation pipeline function
         generate_features_pipeline(
             symbol=args.symbol,
             interval=args.interval,
         )
     except SystemExit:
-        pass # Catch SystemExit to prevent traceback on intentional sys.exit() calls
-    except Exception:
-        # Catch any other exceptions that might have propagated up
-        logger.error("Feature generation script terminated due to an unhandled error.")
+        pass
+    except Exception: 
+        logger.error("Feature generation script terminated due to an unhandled error.", exc_info=True) 
         sys.exit(1)
-
 
     """
     Usage example:
@@ -213,5 +181,5 @@ if __name__ == "__main__":
         python scripts/generate_features.py --symbol BTCUSDT --interval 1h
 
     Generate features for ADAUSDT 5-minute data:
-        python -m  scripts.generate_features --symbol ADAUSDT --interval 5m
+        python -m scripts.generate_features --symbol ADAUSDT --interval 5m
     """

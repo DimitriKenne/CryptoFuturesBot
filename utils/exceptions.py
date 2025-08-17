@@ -71,5 +71,26 @@ class ModelAnalysisError(Exception):
     """Custom exception for errors during model analysis."""
     pass
 
-# You can define other custom exceptions here as your project grows,
-# e.g., ConfigurationError, DataProcessingError.
+class ConfigurationError(Exception):
+    """
+    Custom exception raised when there's an issue with application configuration.
+    This can include missing parameters, invalid values, or inconsistencies
+    between configuration sections.
+    """
+    def __init__(self, message: str, config_path: str = None, original_exception: Exception = None):
+        """
+        Initializes the ConfigurationError.
+
+        Args:
+            message (str): A descriptive error message.
+            config_path (str, optional): The path to the configuration file or specific
+                                         configuration parameter that caused the error.
+                                         Defaults to None.
+            original_exception (Exception, optional): The underlying exception that caused this error.
+                                                      Defaults to None.
+        """
+        super().__init__(message)
+        self.message = message
+        self.config_path = config_path
+        self.original_exception = original_exception
+

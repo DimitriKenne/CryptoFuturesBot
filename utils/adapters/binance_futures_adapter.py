@@ -29,7 +29,7 @@ if str(PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(PROJECT_ROOT))
 
 # Import custom exceptions and base interface
-from utils.exchange_interface import ExchangeInterface
+from utils.adapters.exchange_interface import ExchangeInterface
 from utils.exceptions import ExchangeConnectionError, OrderExecutionError # <--- ENSURED THESE ARE IMPORTED
 
 # Define FLOAT_EPSILON from params.py for consistency

@@ -90,7 +90,7 @@ try:
 
     # Import the DataManager
     # Assumes it's located in utils/data_manager.py
-    from utils.data_manager import DataManager
+    from utils.data_management.data_manager import DataManager
 
 except ImportError as e:
     logger.error(f"Failed to import necessary modules. Ensure your project structure matches expectations (config/, adapters/, utils/) and that required files (params.py, paths.py, binance_futures_adapter.py, data_manager.py) exist.")

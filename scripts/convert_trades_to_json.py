@@ -24,7 +24,7 @@ except ImportError:
 
 # Import the DataManager utility (still needed for loading OHLCV)
 try:
-    from utils.data_manager import DataManager
+    from utils.data_management.data_manager import DataManager
 except ImportError:
     print("ERROR: Failed to import DataManager from utils.data_manager.", file=sys.stderr)
     print("Ensure utils/data_manager.py exists and is accessible.")
