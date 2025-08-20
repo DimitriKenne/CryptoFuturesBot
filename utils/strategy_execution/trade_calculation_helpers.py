@@ -31,7 +31,7 @@ class TradeCalculationHelpers:
                                     It is assumed that this app_config has already been
                                     validated by config/validator.py externally.
         """
-        self.logger = logging.getLogger(__name__)
+        self.logger = logging.getLogger(self.__class__.__name__)
         self.config = app_config # Store the full AppConfig
 
         # Initialize precision and minimums from exchange config for direct access
@@ -64,7 +64,9 @@ class TradeCalculationHelpers:
              return price
 
         try:
-            return round(price, self.price_precision)
+            rounded_price = round(price, self.price_precision)
+            self.logger.debug(f"Rounded price: {rounded_price}")
+            return rounded_price
         except (TypeError, ValueError) as e:
              self.logger.warning(f"Could not round price {price} to precision {self.price_precision}: {e}")
              return np.nan
@@ -88,7 +90,9 @@ class TradeCalculationHelpers:
         try:
             factor = 10 ** self.quantity_precision
             # Floor division equivalent for floating point precision
-            return math.floor(quantity * factor) / factor
+            rounded_quantity = math.floor(quantity * factor) / factor
+            self.logger.debug(f"Rounded quantity: {rounded_quantity}")
+            return rounded_quantity
         except (TypeError, ValueError) as e:
              self.logger.warning(f"Could not round quantity {quantity} to precision {self.quantity_precision}: {e}")
              return np.nan
@@ -126,22 +130,9 @@ class TradeCalculationHelpers:
 
 
     def calculate_sl_tp_prices(self, side: str, current_price: float, latest_atr: Optional[float]) -> Tuple[Optional[float], Optional[float]]:
-        """
-        Calculates Stop Loss (SL) and Take Profit (TP) prices based on volatility
-        adjustment or fixed percentages from configuration.
-
-        Args:
-            side (str): 'buy' for long position, 'sell' for short position.
-            current_price (float): The current market price.
-            latest_atr (Optional[float]): The latest Average True Range value, used for
-                                          volatility-adjusted targets if enabled.
-
-        Returns:
-            Tuple[Optional[float], Optional[float]]: A tuple containing the calculated
-                                                      (stop_loss_price, take_profit_price).
-                                                      Prices can be `None` or `np.nan` if invalid.
-        """
-        self.logger.debug(f"Calculating SL/TP for {side.upper()} entry at {current_price:.8f}")
+        self.logger.info(
+            f"🎯 SL/TP Calculation | Side: {side.upper()} | Price: {current_price:.4f} | ATR: {latest_atr:.4f}"
+        )
 
         # Access SLTP config via self.config
         fixed_sl_pct_fraction = self.config.trading.sltp.fixed_stop_loss_pct / 100.0
@@ -204,35 +195,20 @@ class TradeCalculationHelpers:
                   self.logger.warning(f"TP price invalid ({take_profit_price}) after rounding. Setting TP to NaN.")
                   take_profit_price = np.nan
 
-        sl_str = f"{stop_loss_price:.8f}" if stop_loss_price is not None and pd.notna(stop_loss_price) else "N/A"
-        tp_str = f"{take_profit_price:.8f}" if take_profit_price is not None and pd.notna(take_profit_price) else "N/A"
-        self.logger.info(f"Calculated Prices: SL={sl_str}, TP={tp_str}")
-
+        self.logger.info(
+            f"🎯 SL/TP Result | SL: {stop_loss_price:.4f} | TP: {take_profit_price:.4f}"
+        )
         return stop_loss_price, take_profit_price
 
     def calculate_position_size(self,
                                 current_equity: float,
                                 current_price: float,
                                 stop_loss_price: float,
-                                trade_direction: int # 1 for long, -1 for short
+                                trade_direction: int
                                ) -> Tuple[Optional[float], Optional[float]]:
-        """
-        Calculates the appropriate position size (quantity and notional value)
-        based on risk settings, available capital, entry price, stop-loss price,
-        and exchange margin/minimum requirements.
-
-        Args:
-            current_equity (float): The current available equity in the account.
-            current_price (float): The current market price for the asset.
-            stop_loss_price (float): The determined stop loss price for the trade.
-            trade_direction (int): 1 for long, -1 for short.
-
-        Returns:
-            Tuple[Optional[float], Optional[float]]: A tuple containing the calculated
-                                                      (adjusted_quantity, notional_value_usd).
-                                                      Returns (None, None) if size cannot be determined.
-        """
-        self.logger.debug(f"Calculating position size for entry at {current_price:.8f}, SL at {stop_loss_price:.8f}")
+        self.logger.info(
+            f"📏 Position Size | Equity: {current_equity:.2f} | Price: {current_price:.4f} | SL: {stop_loss_price:.4f} | Dir: {trade_direction}"
+        )
 
         # Access risk and trade execution config via self.config
         risk_per_trade_fraction = self.config.trading.risk.risk_per_trade_pct / 100.0
@@ -291,23 +267,15 @@ class TradeCalculationHelpers:
              self.logger.warning(f"Calculated quantity {adjusted_quantity:.8f} or notional value {notional_value:.2f} are below exchange minimums. Setting size to 0.")
              return None, None
 
-        self.logger.info(f"Calculated Position Size: {adjusted_quantity:.8f}") # Removed {self.config.symbol} as symbol is not passed to helpers
-        self.logger.debug(f"  Notional: {notional_value:.2f}, Margin: {notional_value / leverage:.2f}, Est. Fee: {notional_value * trading_fee_rate:.4f}")
+        self.logger.info(
+            f"📏 Position Size Result | Qty: {adjusted_quantity:.4f} | Notional: {notional_value:.2f}"
+        )
         return adjusted_quantity, notional_value
 
     def estimate_liquidation_price(self, side: str, entry_price: float) -> Optional[float]:
-        """
-        Estimates the liquidation price for a position.
-
-        Args:
-            side (str): 'buy' for long position, 'sell' for short position.
-            entry_price (float): The price at which the position was entered.
-
-        Returns:
-            Optional[float]: The estimated liquidation price, or None if the price
-                             cannot be estimated (e.g., invalid input).
-        """
-        self.logger.debug(f"Estimating liquidation price for {side.upper()} entry at {entry_price:.8f}")
+        self.logger.info(
+            f"⚠️ Liquidation Price | Side: {side.upper()} | Entry: {entry_price:.4f}"
+        )
 
         # Access risk and backtest config via self.config
         leverage = self.config.trading.risk.leverage
@@ -329,6 +297,9 @@ class TradeCalculationHelpers:
 
             liq_price = self._round_price(liq_price)
 
+            self.logger.info(
+                f"⚠️ Liquidation Price Result: {liq_price:.4f}"
+            )
             return liq_price if pd.notna(liq_price) and liq_price > FLOAT_EPSILON else None
 
         except Exception as e:
@@ -336,18 +307,10 @@ class TradeCalculationHelpers:
             return None
 
     def is_sl_safe_from_liquidation(self, side: str, stop_loss_price: float, liquidation_price: float) -> bool:
-        """
-        Checks if the Stop Loss (SL) price is safely distanced from the liquidation price
-        based on the configured minimum liquidation distance.
+        self.logger.info(
+            f"🔒 SL Safety | SL: {stop_loss_price:.4f} | Liq: {liquidation_price:.4f} | Side: {side}"
+        )
 
-        Args:
-            side (str): 'buy' for long position, 'sell' for short position.
-            stop_loss_price (float): The calculated stop loss price.
-            liquidation_price (float): The estimated liquidation price.
-
-        Returns:
-            bool: True if SL is safely distanced, False otherwise.
-        """
         if pd.isna(stop_loss_price) or pd.isna(liquidation_price):
              self.logger.warning("Cannot check SL safety: Invalid SL or Liquidation price (NaN).")
              return False
@@ -366,6 +329,9 @@ class TradeCalculationHelpers:
             is_safe = stop_loss_price < safe_sl_level + FLOAT_EPSILON # Use tolerance for comparison
             if not is_safe:
                 self.logger.warning(f"Short SL check: SL ({stop_loss_price:.8f}) NOT below Liq ({liquidation_price:.8f}) - Buffer ({safety_buffer:.8f}) = {safe_sl_level:.8f}")
+        self.logger.info(
+            f"🔒 SL Safety Result: {is_safe}"
+        )
         return is_safe
 
     def apply_entry_filters(self,
@@ -491,6 +457,9 @@ class TradeCalculationHelpers:
                  self.logger.error(f"Error applying trend filter at candle {current_timestamp}: {e}. Blocking trade.", exc_info=True)
                  return 0
 
+        self.logger.info(
+            f"Applying entry filters: Signal={signal}, Timestamp={latest_features.name}, Probabilities={latest_probabilities.to_dict() if latest_probabilities is not None else '{}'}"
+        )
         self.logger.debug(f"Candle {current_timestamp}: Signal {signal} passed all active filters.")
         return signal # Signal passes all active filters
 
@@ -506,26 +475,10 @@ class TradeCalculationHelpers:
         notional_value_at_exit: float,
         exit_reason: str,
     ) -> Tuple[float, float, float, float]:
-        """
-        Calculates the Gross PnL, Exit Fee, Liquidation Fee (if applicable),
-        and Net PnL for a trade closure.
+        self.logger.info(
+            f"💸 PnL/Fees | Dir: {trade_direction_int} | Entry: {entry_price:.4f} | Exit: {actual_exit_price:.4f} | Qty: {quantity} | EntryFee: {entry_fee:.2f} | Reason: {exit_reason}"
+        )
 
-        Args:
-            trade_direction_int (int): 1 for long, -1 for short.
-            entry_price (float): The price at which the trade was entered.
-            actual_exit_price (float): The actual price at which the trade was exited (after slippage, if any).
-            quantity (float): The quantity of the trade.
-            entry_fee (float): The fee incurred when entering the trade.
-            trading_fee_rate (float): The percentage rate for standard trading fees (e.g., 0.0005 for 0.05%).
-            liquidation_fee_rate (float): The percentage rate for liquidation fees.
-            notional_value_at_exit (float): The notional value of the position at the exit price (quantity * actual_exit_price).
-                                            Used as basis for liquidation fee.
-            exit_reason (str): The reason for the trade exit (e.g., 'stop_loss', 'take_profit', 'liquidation').
-
-        Returns:
-            Tuple[float, float, float, float]:
-                (gross_pnl, exit_fee, liquidation_fee, net_pnl)
-        """
         if pd.isna(entry_price) or pd.isna(actual_exit_price) or pd.isna(quantity) or quantity <= FLOAT_EPSILON:
             self.logger.error("Invalid input for PnL and fee calculation.")
             return 0.0, 0.0, 0.0, 0.0
@@ -559,7 +512,9 @@ class TradeCalculationHelpers:
         # 5. Calculate Net PnL
         net_pnl = gross_pnl - total_fees
 
-        self.logger.debug(f"PnL Calculation: Gross={gross_pnl:.4f}, EntryFee={entry_fee:.4f}, ExitFee={exit_fee:.4f}, LiqFee={liquidation_fee:.4f}, TotalFees={total_fees:.4f}, Net={net_pnl:.4f}")
+        self.logger.info(
+            f"💸 PnL/Fees Result | GrossPnL: {gross_pnl:.2f} | ExitFee: {exit_fee:.2f} | LiqFee: {liquidation_fee:.2f} | NetPnL: {net_pnl:.2f}"
+        )
 
         return gross_pnl, exit_fee, liquidation_fee, net_pnl
 

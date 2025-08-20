@@ -27,24 +27,24 @@ class Strategy4(BaseLabelingStrategy):
     that correlate with significant future price movements, adjusted for realistic transaction costs.
     """
 
-    def __init__(self, config: LabelingStrategy4Config, logger: logging.Logger, trading_fee_rate: float, slippage_tolerance_pct: float):
+    def __init__(self, config: LabelingStrategy4Config, logger: logging.Logger, trading_fee_rate: float, slippage_tolerance_rate: float):
         """
         Initializes Labeling Strategy 4 (Clustering-Based Labeling Strategy).
 
         Args:
             config (LabelingStrategy4Config): The configuration dataclass for this labeling strategy.
             logger (logging.Logger): A logger instance.
-            trading_fee_rate (float): The transaction fee rate.
-            slippage_tolerance_pct (float): The estimated slippage rate.
+            trading_fee_rate (float): The transaction fee rate (0-1).
+            slippage_tolerance_rate (float): The estimated slippage rate (0-1).
         """
-        super().__init__(config, logger, trading_fee_rate, slippage_tolerance_pct)
+        super().__init__(config, logger, trading_fee_rate, slippage_tolerance_rate)
         self.logger.info("Labeling Strategy 4 (Clustering-Based Labeling) initializing...")
         self._validate_strategy_config()
 
         # Access parameters directly from the LabelingStrategy4Config dataclass
         self.n_clusters = self.config.n_clusters
         self.features_for_clustering = self.config.features_for_clustering
-        self.pca_n_components = self.config.pca_n_components
+        self.pca_n_components_pct = self.config.pca_n_components_pct # This is a percentage 0-100
         self.cluster_to_label_mapping = self.config.cluster_to_label_mapping
         self.future_return_window = self.config.future_return_window
 
@@ -54,11 +54,11 @@ class Strategy4(BaseLabelingStrategy):
         self.kmeans = None
 
         self.logger.info(f"  Number of Clusters (K): {self.n_clusters}")
-        self.logger.info(f"  PCA Components/Variance: {self.pca_n_components}")
+        self.logger.info(f"  PCA Components/Variance: {self.pca_n_components_pct:.2f}%")
         self.logger.info(f"  Cluster to Label Mapping: {self.cluster_to_label_mapping}")
         self.logger.info(f"  Features for Clustering: {self.features_for_clustering[:5]}... (showing first 5)")
-        self.logger.info(f"  Trading Fee Rate: {self.trading_fee_rate:.4f}")
-        self.logger.info(f"  Slippage Tolerance: {self.slippage_tolerance_pct:.6f}")
+        self.logger.info(f"  Trading Fee Rate: {self.trading_fee_rate:.6f}")
+        self.logger.info(f"  Slippage Tolerance: {self.slippage_tolerance_rate:.6f}")
         self.logger.info(f"  Future Return Window: {self.future_return_window} bars")
 
     def _validate_strategy_config(self):
@@ -69,8 +69,9 @@ class Strategy4(BaseLabelingStrategy):
             raise ValueError("'n_clusters' must be an integer greater than 1.")
         if not isinstance(self.config.features_for_clustering, list) or not self.config.features_for_clustering:
             raise ValueError("'features_for_clustering' must be a non-empty list of strings.")
-        if not isinstance(self.config.pca_n_components, (int, float)) or (isinstance(self.config.pca_n_components, float) and not (0 < self.config.pca_n_components <= 1)):
-            raise ValueError("'pca_n_components' must be a positive integer or a float between 0 and 1.")
+        # pca_n_components_pct is a percentage, so validate it's 0-100
+        if not isinstance(self.config.pca_n_components_pct, (int, float)) or not (0 < self.config.pca_n_components_pct <= 100):
+            raise ValueError("'pca_n_components_pct' must be a number between 0 (exclusive) and 100 (inclusive).")
         if not isinstance(self.config.cluster_to_label_mapping, dict) or not self.config.cluster_to_label_mapping:
             raise ValueError("'cluster_to_label_mapping' must be a non-empty dictionary.")
         if not all(label in [-1, 0, 1] for label in self.config.cluster_to_label_mapping.values()):
@@ -116,7 +117,9 @@ class Strategy4(BaseLabelingStrategy):
         self.logger.debug(f"Features scaled. Scaled data shape: {X_scaled_df.shape}")
 
         # --- 3. Apply PCA for Dimensionality Reduction ---
-        self.pca = PCA(n_components=self.pca_n_components, random_state=42)
+        # Convert pca_n_components_pct from percentage (0-100) to rate (0-1) for PCA
+        pca_n_components_rate = self.pca_n_components_pct / 100.0
+        self.pca = PCA(n_components=pca_n_components_rate, random_state=42)
         X_pca = self.pca.fit_transform(X_scaled_df)
         pca_component_names = [f'PC{i+1}' for i in range(X_pca.shape[1])]
         X_pca_df = pd.DataFrame(X_pca, columns=pca_component_names, index=valid_indices)
@@ -136,21 +139,23 @@ class Strategy4(BaseLabelingStrategy):
         close_prices = df_copy.loc[valid_indices, 'close'].copy()
         future_close_prices = close_prices.shift(-self.future_return_window)
 
-        entry_cost_long_factor = (1 + self.trading_fee_rate + self.slippage_tolerance_pct)
-        exit_revenue_long_factor = (1 - self.trading_fee_rate - self.slippage_tolerance_pct)
-        entry_revenue_short_factor = (1 - self.trading_fee_rate - self.slippage_tolerance_pct)
-        exit_cost_short_factor = (1 + self.trading_fee_rate + self.slippage_tolerance_pct)
+        # Use rates (0-1) for fees and slippage directly
+        entry_cost_long_factor = (1 + self.trading_fee_rate + self.slippage_tolerance_rate)
+        exit_revenue_long_factor = (1 - self.trading_fee_rate - self.slippage_tolerance_rate)
+        entry_revenue_short_factor = (1 - self.trading_fee_rate - self.slippage_tolerance_rate)
+        exit_cost_short_factor = (1 + self.trading_fee_rate + self.slippage_tolerance_rate)
         safe_current_close = close_prices.replace(0, np.nan)
 
+        # Net return potentials as rates (0-1)
         net_return_long_potential = (
             (future_close_prices * exit_revenue_long_factor - safe_current_close * entry_cost_long_factor) /
             (safe_current_close * entry_cost_long_factor)
-        ) * 100.0
+        )
 
         net_return_short_potential = (
             (safe_current_close * entry_revenue_short_factor - future_close_prices * exit_cost_short_factor) /
             (safe_current_close * entry_revenue_short_factor)
-        ) * 100.0
+        )
 
         df_for_interpretation = pd.DataFrame({
             'cluster': cluster_labels_series,
@@ -160,8 +165,8 @@ class Strategy4(BaseLabelingStrategy):
 
         df_for_interpretation['effective_future_return_pct'] = np.where(
             df_for_interpretation['net_return_long_potential'] > df_for_interpretation['net_return_short_potential'],
-            df_for_interpretation['net_return_long_potential'],
-            -df_for_interpretation['net_return_short_potential']
+            df_for_interpretation['net_return_long_potential'] * 100.0, # Convert to percentage for interpretation
+            -df_for_interpretation['net_return_short_potential'] * 100.0 # Convert to percentage for interpretation
         )
         df_for_interpretation.dropna(subset=['effective_future_return_pct'], inplace=True)
         median_returns_per_cluster_calculated = df_for_interpretation.groupby('cluster')['effective_future_return_pct'].median().sort_values(ascending=False)

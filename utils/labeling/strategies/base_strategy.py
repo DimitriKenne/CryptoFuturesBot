@@ -5,6 +5,7 @@ import pandas as pd
 import numpy as np
 import logging
 from typing import Dict, Any, Optional, List
+from pathlib import Path # Import Path for type hinting
 
 # --- Import global constants and configuration ---
 from config.params import app_config, FLOAT_EPSILON
@@ -21,7 +22,7 @@ class BaseLabelingStrategy(ABC):
     labeling strategies interchangeably.
     """
 
-    def __init__(self, config: Any, logger: logging.Logger, trading_fee_rate: Optional[float] = None, slippage_tolerance_pct: Optional[float] = None):
+    def __init__(self, config: Any, logger: logging.Logger, trading_fee_rate: float, slippage_tolerance_rate: float):
         """
         Initializes the base labeling strategy with common parameters.
 
@@ -30,20 +31,21 @@ class BaseLabelingStrategy(ABC):
                           This will be like LabelingStrategy1Config, LabelingStrategy2Config etc.
             logger (logging.Logger): A logger instance for logging messages specific
                                      to this labeling strategy.
-            trading_fee_rate (float): The transaction fee rate to apply to calculations.
-                                      If None, uses app_config.labeling.trading_fee_rate.
-            slippage_tolerance_pct (float): The estimated slippage rate to apply to calculations.
-                                            If None, uses app_config.labeling.slippage_tolerance_pct.
+            trading_fee_rate (float): The transaction fee rate (0-1, not percentage).
+            slippage_tolerance_rate (float): The estimated slippage rate (0-1, not percentage).
         """
         self.config = config
         self.logger = logger
-        # Use config values if provided, else fallback to global config
-        self.trading_fee_rate = trading_fee_rate if trading_fee_rate is not None else app_config.labeling.trading_fee_rate
-        self.slippage_tolerance_pct = slippage_tolerance_pct if slippage_tolerance_pct is not None else app_config.labeling.slippage_tolerance_pct
+        # These are now expected to be passed already converted to rates (0-1)
+        self.trading_fee_rate = trading_fee_rate
+        self.slippage_tolerance_rate = slippage_tolerance_rate
         
         self.logger.debug(f"BaseLabelingStrategy initialized for {self.__class__.__name__}.")
         self.logger.debug(f"  Trading Fee Rate: {self.trading_fee_rate}")
-        self.logger.debug(f"  Slippage Tolerance: {self.slippage_tolerance_pct}")
+        self.logger.debug(f"  Slippage Tolerance: {self.slippage_tolerance_rate}")
+
+        # _df_for_intermediate_analysis is no longer needed as the strategy performs/saves analysis directly
+        # self._df_for_intermediate_analysis: Optional[pd.DataFrame] = None # REMOVED
 
     @abstractmethod
     def calculate_raw_labels(self, df: pd.DataFrame) -> pd.DataFrame:
@@ -65,6 +67,41 @@ class BaseLabelingStrategy(ABC):
                           as the input df.
         Raises:
             ValueError: If input DataFrame is missing required columns or features for this labeling strategy.
+        """
+        pass
+
+    @abstractmethod
+    def perform_strategy_specific_analysis(
+        self,
+        df: pd.DataFrame, # This will be the *processed* df, potentially with intermediate columns
+        symbol: str,
+        interval: str,
+        output_dir: Path,
+        plotter: Any, # We'll need to pass the AnalysisPlotter instance
+        calculator: Any # And the AnalysisCalculator instance
+    ) -> None:
+        """
+        Performs analysis specific to this labeling strategy using its intermediate data
+        and saves the results (e.g., plots, tables) directly to the specified output directory.
+
+        This method is intended to be called *after* calculate_raw_labels has been run
+        and the strategy has potentially generated any necessary intermediate columns in 'df'.
+        It should handle its own plotting and saving for its unique insights.
+
+        Args:
+            df (pd.DataFrame): The input DataFrame, which *may* include intermediate columns
+                               that the strategy needs for its specific analysis (e.g., Net_Return_Long/Short).
+                               It's the responsibility of the concrete strategy's `calculate_raw_labels`
+                               to ensure these are present in the DataFrame it returns, or that it processes
+                               them and then drops them before returning the final 'label' column.
+            symbol (str): The trading pair symbol.
+            interval (str): The time interval.
+            output_dir (Path): The directory where analysis results should be saved.
+            plotter (Any): An instance of AnalysisPlotter to use for generating plots.
+            calculator (Any): An instance of AnalysisCalculator to use for specific calculations.
+
+        Returns:
+            None
         """
         pass
 

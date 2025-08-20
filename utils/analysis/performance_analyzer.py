@@ -281,40 +281,38 @@ class PerformanceAnalyzer:
 
     def run_full_analysis(self):
         """Runs the full analysis pipeline: calculate metrics, generate plots, save results."""
-        self.logger.info(f"--- Running Analysis for {self.symbol} {self.interval} ({self.model_type}) {self.results_type} results ---")
+        self.logger.info(f"\n{'='*40}\n📊 Running Analysis for {self.symbol} {self.interval} ({self.model_type}) {self.results_type}\n{'='*40}")
         try:
             # If data was not passed to constructor, try to load from files
             if self.trade_history_df.empty or self.equity_df.empty or not self.metrics:
                 self._load_data()
             
             # Check if equity was loaded or calculated successfully.
-            # If equity is still empty after loading/reconstruction, stop.
-            if self.equity_df.empty or 'equity' not in self.equity_df.columns or self.equity_df['equity'].empty: # Added column check
-                self.logger.error("Could not load or calculate equity curve. Analysis aborted.")
-                return # Abort if equity is not available
+            if self.equity_df.empty or 'equity' not in self.equity_df.columns or self.equity_df['equity'].empty:
+                self.logger.error("❌ Could not load or calculate equity curve. Analysis aborted.")
+                return
 
             self.calculate_summary_metrics() # This will populate self.metrics
 
             # Log the summary metrics
-            self.logger.info(f"Analysis Summary for {self.symbol} {self.interval} ({self.model_type}) {self.results_type}:")
+            self.logger.info(f"\n{'-'*30}\n📈 Analysis Summary\n{'-'*30}")
             if self.metrics:
                 for key, value in self.metrics.items():
-                    if isinstance(value, (int, float)): # Format numbers
-                        self.logger.info(f"  {key}: {value:.4f}")
+                    if isinstance(value, (int, float)):
+                        self.logger.info(f"{key}: {value:.4f}")
                     else:
-                        self.logger.info(f"  {key}: {value}")
+                        self.logger.info(f"{key}: {value}")
             else:
-                self.logger.info("  No metrics were calculated.")
-            self.logger.info("=" * 50) # Separator
-
+                self.logger.info("No metrics were calculated.")
+            self.logger.info("=" * 50)
 
             self._save_metrics()
-            self._generate_plots() # This method now includes the new exit reason frequency plot
+            self._generate_plots()
 
         except (FileNotFoundError, ValueError, IOError) as e:
-            self.logger.error(f"Analysis aborted due to data loading/processing error: {e}", exc_info=True)
+            self.logger.error(f"❌ Analysis aborted due to data loading/processing error: {e}", exc_info=True)
         except Exception as e:
-            self.logger.error(f"An unexpected error occurred during analysis: {e}", exc_info=True)
+            self.logger.error(f"❌ An unexpected error occurred during analysis: {e}", exc_info=True)
         finally:
-            self.logger.info("--- Analysis Complete ---")
+            self.logger.info(f"\n{'='*40}\n✅ Analysis Complete\n{'='*40}")
 

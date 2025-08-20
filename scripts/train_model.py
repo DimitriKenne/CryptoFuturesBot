@@ -615,7 +615,7 @@ def main(
 
 
         trainer = ModelTrainer(model_config=model_config_for_trainer)
-        trainer.train(X_tr, y_tr, X_val=X_val_for_trainer, y_val=y_val_for_trainer)
+        trainer.train(X_tr, y_tr, X_val=X_val_for_trainer, y_val=y_val_for_trainer, symbol=symbol, interval=interval)
 
 
     except (ValueError, TypeError, ImportError, RuntimeError) as e:

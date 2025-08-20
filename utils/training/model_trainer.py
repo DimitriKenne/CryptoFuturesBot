@@ -23,20 +23,16 @@ import copy
 
 # --- Add project root to Python path for imports ---
 import sys
-# Adjust PROJECT_ROOT to point to the main project directory,
-# assuming utils/training/model_trainer.py is 3 levels deep from project root
-# (your_project/utils/training/model_trainer.py)
 PROJECT_ROOT = Path(__file__).resolve().parent.parent.parent
 sys.path.insert(0, str(PROJECT_ROOT))
 
 # Import necessary items from params.py (the central AppConfig) and config schemas
 try:
     from config.params import app_config, FLOAT_EPSILON
-    # ModelConfig now explicitly has TF_AVAILABLE and tf attributes
     from config.model import ModelConfig, LSTMParams, RandomForestParams, XGBoostParams
     from utils.data_management.data_manager import DataManager
 
-    # Import the new modular training utilities (relative imports since they are in the same folder now)
+    # Import the new modular training utilities
     from .preprocessor_builder import PreprocessorBuilder
     from .model_builder import ModelBuilder
     from .data_sequencer import DataSequencer
@@ -46,14 +42,18 @@ try:
     tf = app_config.model.tf # The tensorflow module
 except ImportError as e:
     logging.error(f"Failed to import necessary modules for ModelTrainer: {e}")
-    raise # Re-raise the exception to stop execution if essential imports fail
+    raise
+except Exception as e:
+    logging.error(f"Unexpected error during imports/config loading: {e}")
+    raise
 
 
 # Conditional import for type hinting if TYPE_CHECKING is True
 if TYPE_CHECKING:
     from sklearn.base import BaseEstimator
-    if TF_AVAILABLE:
-        from tensorflow.keras.models import Model as KerasModel # type: ignore
+    # Removed direct tensorflow.keras submodule imports here.
+    # Instead, use string literals like 'tf.keras.models.Model' for type hints.
+    # This prevents Pylance from trying to resolve direct imports that might fail.
 
 
 # Get logger for this module
@@ -104,7 +104,8 @@ class ModelTrainer:
         if self.model_type == 'lstm' and not self._model_config.TF_AVAILABLE:
             raise ImportError("TensorFlow is required for LSTM model but is not installed or available.")
 
-        self.model: Optional[Union['BaseEstimator', 'KerasModel']] = None # type: ignore
+        # Updated type hint for self.model to use string literal for KerasModel
+        self.model: Optional[Union['BaseEstimator', 'tf.keras.Model']] = None
         self.pipeline: Optional[Pipeline] = None
         self.preprocessor: Optional[ColumnTransformer] = None
         self.feature_columns_processed: Optional[List[str]] = None
@@ -134,10 +135,9 @@ class ModelTrainer:
             self.data_sequencer = None
 
         self.dm = DataManager()
-        # Do NOT log model type here; log it after loading correct config in load()
 
 
-    def train(self, X_train: pd.DataFrame, y_train: pd.Series, X_val: Optional[pd.DataFrame] = None, y_val: Optional[pd.Series] = None):
+    def train(self, X_train: pd.DataFrame, y_train: pd.Series, X_val: Optional[pd.DataFrame] = None, y_val: Optional[pd.Series] = None, symbol: Optional[str] = None, interval: Optional[str] = None):
         """
         Trains the model using the provided training data.
         Includes preprocessing and handling of class imbalance if configured.
@@ -147,6 +147,8 @@ class ModelTrainer:
             y_train (pd.Series): Training labels (-1, 0, 1).
             X_val (Optional[pd.DataFrame]): Validation features (for LSTM, should be cleaned of NaNs).
             y_val (Optional[pd.Series]): Validation labels (for LSTM, should be cleaned of NaNs).
+            symbol (Optional[str]): Trading pair symbol, used for saving best model weights.
+            interval (Optional[str]): Time interval, used for saving best model weights.
 
         Raises:
             ValueError: If training data is empty or contains issues.
@@ -172,7 +174,6 @@ class ModelTrainer:
             raise RuntimeError("No features selected by preprocessor.")
 
 
-        # Access TF_AVAILABLE directly from the _model_config instance
         if self.model_type == 'lstm':
             if not self._model_config.TF_AVAILABLE:
                 raise ImportError("TensorFlow is not installed. Cannot train LSTM model.")
@@ -196,7 +197,7 @@ class ModelTrainer:
 
             if np.isnan(X_train_scaled).any() or np.isinf(X_train_scaled).any():
                 nan_count = np.isnan(X_train_scaled).sum()
-                inf_count = np.isinf(X_train_scaled).sum()
+                inf_count = np.isinf(X_train_scaled).any()
                 error_msg = f"Scaled training data contains NaN ({nan_count}) or Inf ({inf_count}) values. Cannot train LSTM."
                 self.logger.critical(error_msg)
                 raise ValueError(error_msg)
@@ -260,18 +261,44 @@ class ModelTrainer:
 
 
             callbacks = []
+            # Determine which metric to monitor (validation loss if available, else training loss)
+            monitor_metric = 'val_loss' if val_data or (lstm_params.validation_split > 0 and lstm_params.validation_split < 1) else 'loss'
+            # Determine mode for monitoring ('min' for loss, 'max' for accuracy)
+            monitor_mode = 'min' if 'loss' in monitor_metric else 'max'
+
+
             es_patience = lstm_params.early_stopping_patience
             if es_patience is not None and es_patience > 0:
-                monitor_metric = 'val_loss' if val_data or (lstm_params.validation_split > 0 and lstm_params.validation_split < 1) else 'loss'
-                callbacks.append(self._model_config.tf.keras.callbacks.EarlyStopping(monitor=monitor_metric, patience=es_patience, restore_best_weights=True)) # type: ignore
+                callbacks.append(tf.keras.callbacks.EarlyStopping(monitor=monitor_metric, patience=es_patience, restore_best_weights=True, mode=monitor_mode))
                 self.logger.info(f"Added EarlyStopping with patience {es_patience} monitoring '{monitor_metric}'.")
 
             rlrop_factor = lstm_params.reduce_lr_on_plateau_factor
             rlrop_patience = lstm_params.reduce_lr_on_plateau_patience
             if rlrop_factor is not None and rlrop_patience is not None and rlrop_patience > 0:
-                monitor_metric = 'val_loss' if val_data or (lstm_params.validation_split > 0 and lstm_params.validation_split < 1) else 'loss'
-                callbacks.append(self._model_config.tf.keras.callbacks.ReduceLROnPlateau(monitor=monitor_metric, factor=rlrop_factor, patience=rlrop_patience)) # type: ignore
+                callbacks.append(tf.keras.callbacks.ReduceLROnPlateau(monitor=monitor_metric, factor=rlrop_factor, patience=rlrop_patience, mode=monitor_mode))
                 self.logger.info(f"Added ReduceLROnPlateau with factor {rlrop_factor} and patience {rlrop_patience} monitoring '{monitor_metric}'.")
+
+            # Add ModelCheckpoint to save the best generalizing model
+            if symbol and interval:
+                # FIX: Use get_file_path with 'model' data_type and 'best_model_weights' name_suffix
+                checkpoint_path = self.dm.get_file_path(
+                    symbol=symbol,
+                    interval=interval,
+                    data_type=self.dm._MODEL_ARTIFACT_DATA_TYPE_FORMAT['best_model_weights'], # This maps to 'model'
+                    name_suffix=f'_{self.model_type}_best_model_weights', # e.g., '_lstm_best_model_weights'
+                    model_key=self.model_type # This creates the 'lstm' subfolder
+                ).as_posix()
+
+                callbacks.append(tf.keras.callbacks.ModelCheckpoint(
+                    filepath=checkpoint_path,
+                    monitor=monitor_metric,
+                    save_best_only=True,
+                    mode=monitor_mode,
+                    verbose=1
+                ))
+                self.logger.info(f"Added ModelCheckpoint to save best model weights to {checkpoint_path}.")
+            else:
+                self.logger.warning("Symbol or interval not provided. ModelCheckpoint will not be added to callbacks.")
 
             epochs = lstm_params.epochs
             batch_size = lstm_params.batch_size
@@ -279,13 +306,13 @@ class ModelTrainer:
 
 
             self.logger.info(f"Training LSTM model for {epochs} epochs with batch size {batch_size}...")
-            history = self.model.fit( # type: ignore
+            history = self.model.fit(
                 X_train_seq,
                 y_train_seq_one_hot,
                 epochs=epochs,
                 batch_size=batch_size,
-                validation_data=val_data, # Use external val_data if present
-                validation_split=validation_split_param, # Use internal split only if no external val_data
+                validation_data=val_data,
+                validation_split=validation_split_param,
                 class_weight=class_weight,
                 callbacks=callbacks,
                 verbose=1
@@ -316,8 +343,7 @@ class ModelTrainer:
                     self.logger.info(f"XGBoost early stopping enabled with eval_set. Patience: {model_params.early_stopping_rounds}")
                 else:
                     self.logger.warning("XGBoost early stopping rounds specified, but no validation set (X_val, y_val) provided. Disabling early stopping for this run.")
-                    # Temporarily disable early stopping for this specific fit if no validation data is provided
-                    model_params.early_stopping_rounds = None # This will affect the current model_params object, but it's okay for this run.
+                    model_params.early_stopping_rounds = None
 
             self.model = self.model_builder.build_model(
                 model_type=self.model_type,
@@ -349,20 +375,13 @@ class ModelTrainer:
 
             self.logger.info(f"Training {self.model_type} pipeline...")
             y_train_mapped = y_train.map(self.label_map)
-            # Pass fit_kwargs to the pipeline's fit method if it supports it (XGBoost does via __call__)
-            # Or directly to the model inside the pipeline if accessing it.
-            # For Pipeline, fit_params are passed as <step_name>__<param_name>
+            
             pipeline_fit_params = {}
             if self.model_type == 'xgboost' and fit_kwargs:
-                # Need to map eval_set to 'model__eval_set' for pipeline
                 if 'eval_set' in fit_kwargs:
                     pipeline_fit_params['model__eval_set'] = fit_kwargs['eval_set']
-                if 'early_stopping_rounds' in fit_kwargs: # This is handled by the model itself, not pipeline fit_params
-                    # It's already set on the model directly via the model_builder.
-                    pass
-
-
-            self.pipeline.fit(X_train, y_train_mapped, **pipeline_fit_params) # Pass pipeline_fit_params
+            
+            self.pipeline.fit(X_train, y_train_mapped, **pipeline_fit_params)
             self.logger.info(f"{self.model_type} pipeline training complete.")
 
 
@@ -401,7 +420,7 @@ class ModelTrainer:
 
             if np.isnan(X_test_scaled).any() or np.isinf(X_test_scaled).any():
                 nan_count = np.isnan(X_test_scaled).sum()
-                inf_count = np.isinf(X_test_scaled).sum()
+                inf_count = np.isinf(X_test_scaled).any()
                 error_msg = f"Scaled test data contains NaN ({nan_count}) or Inf ({inf_count}) values. Cannot evaluate LSTM."
                 self.logger.critical(error_msg)
                 raise ValueError(error_msg)
@@ -413,9 +432,9 @@ class ModelTrainer:
                 return {"note": "No test sequences generated for evaluation."}
 
             self.logger.info("Evaluating Keras LSTM model on test sequences...")
-            loss, accuracy = self.model.evaluate(X_test_seq, y_test_seq_one_hot_aligned, verbose=0) # type: ignore
+            loss, accuracy = self.model.evaluate(X_test_seq, y_test_seq_one_hot_aligned, verbose=0)
 
-            y_pred_proba = self.model.predict(X_test_seq) # type: ignore
+            y_pred_proba = self.model.predict(X_test_seq)
             y_pred_mapped = np.argmax(y_pred_proba, axis=1)
 
             y_pred_original = pd.Series(y_pred_mapped).map(self.inverse_label_map).fillna(0).values.astype(int)
@@ -503,7 +522,7 @@ class ModelTrainer:
 
             if np.isnan(X_scaled).any() or np.isinf(X_scaled).any():
                 nan_count = np.isnan(X_scaled).sum()
-                inf_count = np.isinf(X_scaled).sum()
+                inf_count = np.isinf(X_scaled).any()
                 error_msg = f"Scaled LSTM prediction data contains NaN ({nan_count}) or Inf ({inf_count}) values after preprocessing. Cannot make prediction."
                 self.logger.critical(error_msg)
                 return pd.Series(np.nan, index=X.index, dtype=float).astype(Int8Dtype())
@@ -519,7 +538,7 @@ class ModelTrainer:
 
 
             self.logger.info("Making predictions with Keras LSTM model on sequences...")
-            y_pred_proba_array = self.model.predict(X_sequences) # type: ignore
+            y_pred_proba_array = self.model.predict(X_sequences)
             y_pred_mapped = np.argmax(y_pred_proba_array, axis=1)
 
             y_pred_original_values = pd.Series(y_pred_mapped).map(self.inverse_label_map).fillna(0).values
@@ -602,7 +621,7 @@ class ModelTrainer:
 
             if np.isnan(X_scaled).any() or np.isinf(X_scaled).any():
                 nan_count = np.isnan(X_scaled).sum()
-                inf_count = np.isinf(X_scaled).sum()
+                inf_count = np.isinf(X_scaled).any()
                 error_msg = f"Scaled LSTM probability prediction data contains NaN ({nan_count}) or Inf ({inf_count}) values after preprocessing. Cannot make probability prediction."
                 self.logger.critical(error_msg)
                 return None
@@ -616,7 +635,7 @@ class ModelTrainer:
                 return None
 
             self.logger.info("Making probability predictions with Keras LSTM model on sequences...")
-            y_pred_proba_array = self.model.predict(X_sequences) # type: ignore
+            y_pred_proba_array = self.model.predict(X_sequences)
 
             self.logger.info("LSTM probability predictions made.")
             prediction_index = X.index[self.sequence_length - 1:]
@@ -691,6 +710,7 @@ class ModelTrainer:
 
         try:
             if self.model_type == 'lstm':
+                # Save the final (last epoch) model
                 self.dm.save_model_artifact(
                     artifact=self.model,
                     symbol=symbol,
@@ -698,7 +718,7 @@ class ModelTrainer:
                     model_key=model_key,
                     artifact_type='model'
                 )
-                self.logger.info(f"Keras LSTM model saved successfully via DataManager.")
+                self.logger.info(f"Keras LSTM final model saved successfully via DataManager.")
 
                 self.dm.save_model_artifact(
                     artifact=self.preprocessor_builder.preprocessor, # Save preprocessor from builder
@@ -734,6 +754,7 @@ class ModelTrainer:
         """
         Loads a trained model (pipeline or Keras model) and its metadata using DataManager.
         Updates the current ModelTrainer instance with the loaded components.
+        For LSTM, it attempts to load the 'best_model_weights' first, falling back to 'model'.
 
         Args:
             symbol (str): Trading pair symbol.
@@ -840,23 +861,35 @@ class ModelTrainer:
 
 
         # Log the correct model type after loading config from metadata
-        self.logger.info(f"ModelTrainer loaded for model type: {self.model_type}")
+        self.logger.info(f"ModelTrainer loaded for model type: {self.model_type}.")
 
         # --- Load Model / Pipeline using DataManager ---
         self.logger.info(f"Loading {self.model_type} model artifact...")
         try:
             if self.model_type == 'lstm':
-                # Use the TF_AVAILABLE from the _model_config instance
                 if not self._model_config.TF_AVAILABLE:
                     raise ImportError("TensorFlow is required to load LSTM model but is not installed.")
 
-                self.model = self.dm.load_model_artifact(
-                    symbol=symbol,
-                    interval=interval,
-                    model_key=model_key,
-                    artifact_type='model'
-                )
-                self.logger.info("Keras LSTM model loaded successfully via DataManager.")
+                # 1. Try to load the best model weights first (saved by ModelCheckpoint)
+                try:
+                    self.model = self.dm.load_model_artifact(
+                        symbol=symbol,
+                        interval=interval,
+                        model_key=model_key,
+                        artifact_type='best_model_weights' # Request the best weights artifact
+                    )
+                    self.logger.info(f"Successfully loaded BEST Keras LSTM model weights from DataManager.")
+                except FileNotFoundError:
+                    self.logger.warning(f"Best model weights not found for {symbol} {interval} {model_key}. Falling back to loading the final model.")
+                    # 2. Fallback to loading the regular 'model' artifact (last epoch)
+                    self.model = self.dm.load_model_artifact(
+                        symbol=symbol,
+                        interval=interval,
+                        model_key=model_key,
+                        artifact_type='model' # Request the regular 'model' artifact
+                    )
+                    self.logger.info(f"Successfully loaded FINAL Keras LSTM model from DataManager.")
+
 
                 self.logger.info(f"Attempting to load preprocessor for {self.model_type} model...")
                 try:

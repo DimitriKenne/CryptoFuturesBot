@@ -40,35 +40,46 @@ class NotificationManager:
         self.config = config if config else {}
 
         # --- Telegram Configuration ---
-        telegram_config = self.config.get('telegram', {})
-        self.telegram_enabled = telegram_config.get('enabled', False)
-        self.telegram_token = telegram_config.get('token')
-        self.telegram_chat_id = telegram_config.get('chat_id')
-        self.telegram_bot = None # Initialize bot instance
+        # Access TelegramConfig object directly from the passed config dictionary
+        # The 'config' passed from trading_bot.py is app_config.notifier.__dict__
+        # which means config['telegram'] will be the TelegramConfig object.
+        telegram_config_obj = self.config.get('telegram')
 
-        # Validate Telegram config if enabled
-        if self.telegram_enabled:
-            if not TELEGRAM_AVAILABLE:
-                logger.error("Telegram notifications enabled in config, but 'python-telegram-bot' library is not installed. Disabling Telegram.")
-                self.telegram_enabled = False
-            elif not self.telegram_token:
-                logger.error("Telegram notifications enabled, but 'token' is missing in telegram config. Disabling Telegram.")
-                self.telegram_enabled = False
-            elif not self.telegram_chat_id:
-                logger.error("Telegram notifications enabled, but 'chat_id' is missing in telegram config. Disabling Telegram.")
-                self.telegram_enabled = False
-            else:
-                # Initialize the bot instance if enabled and config is valid
-                try:
-                    self.telegram_bot = telegram.Bot(token=self.telegram_token)
-                    logger.info("Telegram notifications enabled.")
-                except Exception as e:
-                    logger.error(f"Failed to initialize Telegram bot: {e}. Disabling Telegram notifications.", exc_info=True)
+        self.telegram_enabled = False
+        self.telegram_token = ''
+        self.telegram_chat_id = ''
+        self.telegram_bot = None
+
+        if telegram_config_obj: # Check if TelegramConfig object exists
+            # Access attributes directly on the dataclass object
+            self.telegram_enabled = telegram_config_obj.enabled
+            self.telegram_token = telegram_config_obj.token
+            self.telegram_chat_id = telegram_config_obj.chat_id
+
+            # Validate Telegram config if enabled
+            if self.telegram_enabled:
+                if not TELEGRAM_AVAILABLE:
+                    logger.error("Telegram notifications enabled in config, but 'python-telegram-bot' library is not installed. Disabling Telegram.")
                     self.telegram_enabled = False
-                    self.telegram_bot = None # Ensure bot is None if initialization fails
-
+                elif not self.telegram_token:
+                    logger.error("Telegram notifications enabled, but 'token' is missing in telegram config. Disabling Telegram.")
+                    self.telegram_enabled = False
+                elif not self.telegram_chat_id:
+                    logger.error("Telegram notifications enabled, but 'chat_id' is missing in telegram config. Disabling Telegram.")
+                    self.telegram_enabled = False
+                else:
+                    # Initialize the bot instance if enabled and config is valid
+                    try:
+                        self.telegram_bot = telegram.Bot(token=self.telegram_token)
+                        logger.info("Telegram notifications enabled.")
+                    except Exception as e:
+                        logger.error(f"Failed to initialize Telegram bot: {e}. Disabling Telegram notifications.", exc_info=True)
+                        self.telegram_enabled = False
+                        self.telegram_bot = None # Ensure bot is None if initialization fails
+            else:
+                logger.info("Telegram notifications disabled based on configuration.")
         else:
-            logger.info("Telegram notifications disabled.")
+            logger.info("Telegram configuration not found in provided config. Telegram notifications disabled.")
 
 
         # --- Slack Configuration (Example - Uncomment and implement _send_slack_message if needed) ---
@@ -155,4 +166,3 @@ class NotificationManager:
 
         # --- 4. Other Services (Email, etc.) ---
         # Add calls to other sender methods here based on config flags
-

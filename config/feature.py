@@ -25,7 +25,7 @@ class TemporalValidationConfig:
     """Temporal safety validation settings."""
     enabled: bool = True
     warning_correlation_threshold: float = 0.3
-    error_correlation_threshold: float = 0.5
+    error_correlation_threshold: float = 0.6
 
 @dataclass
 class FeatureConfig:
@@ -54,7 +54,7 @@ class FeatureConfig:
     ])
     fvg_lookback_bars: int = 3
     z_score_periods: List[int] = field(default_factory=lambda: [20, 30, 40])
-    adr_periods: List[int] = field(default_factory=lambda: [14, 28])
+    adr_periods: List[int] = field(default_factory=lambda: [1, 2])
     trend_strength_periods: List[int] = field(default_factory=lambda: [20, 50])
 
     # Swing Pivots & Breakout Parameters
@@ -85,7 +85,7 @@ class FeatureConfig:
     })
 
     # NaN Handling
-    remove_nan_rows: bool = True # Whether to remove rows with NaNs at the end of feature engineering
+    remove_nan_rows: bool = False # Whether to remove rows with NaNs at the end of feature engineering
 
     # Sequence Length (MUST match model and strategy config if using sequence models like LSTM)
     sequence_length_bars: int = 5

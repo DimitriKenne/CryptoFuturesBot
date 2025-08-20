@@ -154,8 +154,9 @@ class PlottingUtils:
         ax.grid(True, axis='y')
         self._save_plot(fig, "exit_reason_frequency")
 
-    def plot_performance_distribution(self, metrics_df: pd.DataFrame, metric: str = 'Total Return (%)'):
-        """Plots the distribution of a key performance metric from multiple simulations."""
+    def plot_performance_distribution(self, metrics_df: pd.DataFrame, metric: str = 'Total Return (%)', deterministic_metric_value: Optional[float] = None):
+        """Plots the distribution of a key performance metric from multiple simulations,
+        with an optional marker for a deterministic result."""
         plot_data = pd.to_numeric(metrics_df[metric], errors='coerce').dropna()
 
         if plot_data.empty:
@@ -165,8 +166,10 @@ class PlottingUtils:
         fig, ax = plt.subplots(figsize=(12, 7))
         sns.histplot(plot_data, kde=True, bins=30, stat="density", ax=ax)
         
-        # Deterministic result will be added by the MonteCarloAnalyzer directly if needed
-        
+        # Add deterministic result as a vertical line
+        if deterministic_metric_value is not None and pd.notna(deterministic_metric_value):
+            ax.axvline(deterministic_metric_value, color='red', linestyle='--', linewidth=2, label='Deterministic Result')
+            
         ax.set_title(f'Distribution of {metric}', fontsize=16)
         ax.set_xlabel(metric)
         ax.set_ylabel('Density')

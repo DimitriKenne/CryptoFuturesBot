@@ -129,13 +129,38 @@ class TechnicalIndicatorCalculator:
         return (close_prices - mean) / (std + FLOAT_EPSILON)
 
     @staticmethod
-    def calculate_adr(high_prices: pd.Series, low_prices: pd.Series, window: int) -> pd.Series:
+    def calculate_adr(high_prices: pd.Series, low_prices: pd.Series, window: int, interval: str) -> pd.Series:
         """
-        Calculates Average Daily Range (ADR).
-        Assumes input is already at the desired daily frequency for range calculation.
+        Calculates Average Daily Range (ADR) for any interval.
+        For intraday data, aggregates to daily high/low, computes daily range,
+        then rolling mean, and maps back to the original index.
+        For daily or higher, computes ADR directly.
+
+        Args:
+            high_prices (pd.Series): High prices with DatetimeIndex.
+            low_prices (pd.Series): Low prices with DatetimeIndex.
+            window (int): Lookback window for ADR.
+            current_interval (str): Data interval (e.g., '5m', '1d').
+
+        Returns:
+            pd.Series: ADR values indexed to the original data.
         """
-        daily_range = high_prices - low_prices
-        return daily_range.rolling(window=window).mean()
+        df_temp = pd.DataFrame({'high': high_prices, 'low': low_prices})
+        is_intraday = interval not in ["1d", "1D", "daily", "1w", "1W", "weekly", "1M", "monthly"]
+
+        if is_intraday:
+            # Aggregate to daily OHLC to get true daily high and low
+            daily_ohlc = df_temp.resample('D').agg({'high': 'max', 'low': 'min'})
+        else:
+            # If already daily/weekly/monthly, use the provided series directly
+            daily_ohlc = df_temp
+            
+        # Calculate daily range (current day's high - current day's low)
+        daily_range = daily_ohlc['high'] - daily_ohlc['low']
+        adr_daily = daily_range.shift(1).rolling(window=window, min_periods=window).mean()
+        adr_mapped_to_original_index = adr_daily.reindex(high_prices.index, method='ffill')
+        return adr_mapped_to_original_index
+
 
     @staticmethod
     def calculate_volume_oscillator(volume: pd.Series, short_ema_window: int, long_ema_window: int) -> pd.Series:

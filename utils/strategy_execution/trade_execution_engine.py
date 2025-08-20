@@ -71,10 +71,10 @@ class TradeExecutionEngine:
         self,
         signal: int,
         current_capital: float,
-        current_price: float, # The price at which the entry would be considered (e.g., next bar's open)
-        current_bar_features: pd.Series, # Features for the bar that generated the signal (e.g., bar 'i')
-        model_probabilities: Optional[pd.Series] = None, # Model probabilities for the signal bar's prediction
-        current_bar_index: Optional[int] = None # The iloc index of the current bar
+        current_price: float,
+        current_bar_features: pd.Series,
+        model_probabilities: Optional[pd.Series] = None,
+        current_bar_index: Optional[int] = None
     ) -> Optional[Dict[str, Any]]:
         """
         Calculates all necessary details for a potential trade entry.
@@ -216,14 +216,17 @@ class TradeExecutionEngine:
             'entry_reason': 'ML_signal_entry'
         }
 
-        self.logger.info(f"Calculated entry details for {direction_str} trade at {adjusted_entry_price:.{self.exchange_config.price_precision}f} with quantity {adjusted_quantity:.{self.exchange_config.quantity_precision}f}.")
+        self.logger.info(
+            f"🟢 ENTRY CALC | {direction_str.upper()} @ {adjusted_entry_price:.4f} | Qty: {adjusted_quantity:.2f} | SL: {stop_loss_price:.4f} | TP: {take_profit_price:.4f} | Margin: {initial_margin:.2f} | Fee: {entry_fee:.2f}"
+        )
+        self.logger.info(f"🟢 Entry details for {direction_str} trade @ {adjusted_entry_price:.4f} | Qty: {adjusted_quantity:.2f}")
         return entry_details
 
     def check_exit_conditions(
         self,
         open_trade: Dict[str, Any],
-        current_bar_data: pd.Series, # OHLC + signal + probabilities for the current bar being processed
-        current_bar_index: int # The iloc index of the current bar
+        current_bar_data: pd.Series,
+        current_bar_index: int
     ) -> Tuple[bool, Optional[str], Optional[float]]:
         """
         Checks if any 'hard' or strategic exit condition (Stop Loss, Take Profit, Liquidation,
@@ -237,7 +240,7 @@ class TradeExecutionEngine:
                   'reversal_signal', 'invalid_ohlc').
                 - The determined exit price.
         """
-        self.logger.debug(f"Checking exit conditions for trade {open_trade.get('direction_str')} (Entry: {open_trade.get('entry_price'):.{self.exchange_config.price_precision}f}, SL: {open_trade.get('stop_loss_price'):.{self.exchange_config.price_precision}f}, TP: {open_trade.get('take_profit_price'):.{self.exchange_config.price_precision}f}) at bar index {current_bar_index}")
+        self.logger.debug(f"🔍 Checking exit conditions for {open_trade.get('direction_str').upper()} | Entry: {open_trade.get('entry_price'):.4f} | SL: {open_trade.get('stop_loss_price'):.4f} | TP: {open_trade.get('take_profit_price'):.4f} | Bar: {current_bar_index}")
 
         # Ensure essential data points are present
         required_ohlc = ['open', 'high', 'low', 'close']
@@ -344,7 +347,7 @@ class TradeExecutionEngine:
         exit_price: float,
         exit_time: datetime,
         exit_reason: str,
-        current_bar_index: Optional[int] = None # Added for holding_bars calculation in backtest
+        current_bar_index: Optional[int] = None
     ) -> Dict[str, Any]:
         """
         Calculates the financial outcome of a trade closure (Gross PnL, Net PnL, fees)
@@ -437,6 +440,9 @@ class TradeExecutionEngine:
             'notional_value_at_exit': notional_value_at_exit # Add notional value at exit for reference
         })
 
-        self.logger.info(f"Trade closed due to '{exit_reason}' at {actual_exit_price:.{self.exchange_config.price_precision}f}. Net PnL: {net_pnl:.2f}.")
+        self.logger.info(
+            f"🔴 EXIT CALC | {open_trade.get('direction_str','?').upper()} Entry @ {open_trade.get('entry_price',0):.4f} | Exit @ {actual_exit_price:.4f} | NetPnL: {net_pnl:.2f} | Reason: {exit_reason} | Fees: {exit_fee:.2f}+{liquidation_fee:.2f}"
+        )
+        self.logger.info(f"🔴 Trade closed due to '{exit_reason}' @ {actual_exit_price:.4f} | NetPnL: {net_pnl:.2f}")
         return completed_trade
 

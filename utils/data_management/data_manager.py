@@ -92,14 +92,17 @@ class DataManager:
         'model_analysis': 'model_analysis_dir', # Added for model analysis results (pkl) - Redundant but kept for clarity
         'backtesting_analysis': 'backtesting_analysis_dir', # Added for backtesting analysis results
         'live_trading_analysis': 'live_trading_analysis_dir', # Added for live trading analysis results
+        'best_model_weights': 'trained_models_dir', # NEW: For best model weights
+        'model_weights': 'trained_models_dir', # NEW: General for model weights
     }
 
     # Define which artifact types require a model_key subfolder
     ARTIFACT_TYPES_WITH_SUBFOLDER = ['pipeline', 'metadata', 'model', 'preprocessor',
                                      'evaluation', 'model_analysis', 'backtesting_analysis',
-                                     'live_trading_analysis']
+                                     'live_trading_analysis', 'best_model_weights', 'model_weights'] # Added new types here
 
     # Define the data_type key format for model-related artifacts when calling get_file_path
+    # This maps the 'artifact_type' (e.g., 'best_model_weights') to the base 'data_type' in the filename
     _MODEL_ARTIFACT_DATA_TYPE_FORMAT = {
         'pipeline': 'model_pipeline',
         'metadata': 'model_metadata',
@@ -110,6 +113,8 @@ class DataManager:
         'backtesting_analysis': 'backtesting_analysis', # Use 'backtesting_analysis' as the base name
         'live_trading_analysis': 'live_trading_analysis', # Use 'live_trading_analysis' as the base name
         'labeling_analysis': 'labeling_analysis', # Use 'labeling_analysis' as the base name
+        'best_model_weights': 'model', # NEW: Treat best weights as a 'model' artifact
+        'model_weights': 'model', # NEW: Treat general weights as a 'model' artifact
     }
 
 
@@ -126,10 +131,11 @@ class DataManager:
         Args:
             symbol (str): Trading pair symbol (e.g., 'BTCUSDT').
             interval (str): Data interval (e.g., '1h', '5m').
-            data_type (str): Type of data/artifact. This should be one of the keys
-                             in _DIRECTORY_KEY_MAP or the formatted keys used for
-                             model artifacts (e.g., 'model_pipeline', 'evaluation').
+            data_type (str): Type of data/artifact. This should be one of the *values*
+                             in _MODEL_ARTIFACT_DATA_TYPE_FORMAT (e.g., 'model', 'model_metadata', 'evaluation')
+                             or a key in _DIRECTORY_KEY_MAP (e.g., 'raw', 'processed').
             name_suffix (str): Optional suffix to add to the filename before the extension.
+                                This is for additional descriptors, e.g., '_best_model_weights'.
             model_key (Optional[str]): Required for certain artifact types (those in ARTIFACT_TYPES_WITH_SUBFOLDER)
                                        to create a subfolder.
 
@@ -142,23 +148,26 @@ class DataManager:
         directory_key = None
 
         # Determine the directory key based on the provided data_type
-        # Check both maps
+        # First, check if it's a direct data type mapping (raw, processed, etc.)
         if data_type in self._DIRECTORY_KEY_MAP:
             directory_key = self._DIRECTORY_KEY_MAP.get(data_type)
-        # Need to check if the provided data_type is one of the *formatted* keys used for artifacts
-        # We can reverse-lookup from _MODEL_ARTIFACT_DATA_TYPE_FORMAT or check against the values
+        # Next, check if it's one of the *values* used in _MODEL_ARTIFACT_DATA_TYPE_FORMAT
+        # (e.g., 'model', 'model_metadata'). We need to find the corresponding *key*
+        # in _ARTIFACT_DIRECTORY_KEY_MAP via a reverse lookup.
         elif data_type in self._MODEL_ARTIFACT_DATA_TYPE_FORMAT.values():
-             # Find the corresponding artifact_type key to get the directory key
-             artifact_type_lookup = next((k for k, v in self._MODEL_ARTIFACT_DATA_TYPE_FORMAT.items() if v == data_type), None)
-             if artifact_type_lookup and artifact_type_lookup in self._ARTIFACT_DIRECTORY_KEY_MAP:
-                  directory_key = self._ARTIFACT_DIRECTORY_KEY_MAP.get(artifact_type_lookup)
-             else:
-                 # This case should ideally not be reached if _MODEL_ARTIFACT_DATA_TYPE_FORMAT is correct
-                 raise ValueError(f"Internal error: Could not map formatted data_type '{data_type}' to a valid artifact type directory.")
+            # Find the artifact_type (key in _MODEL_ARTIFACT_DATA_TYPE_FORMAT)
+            # that maps to this data_type value.
+            # Note: This assumes uniqueness of values in _MODEL_ARTIFACT_DATA_TYPE_FORMAT for this reverse lookup.
+            # If multiple artifact_types map to the same data_type, this picks the first.
+            # For our current use case, this is fine as they should map to the same directory.
+            artifact_type_from_data_type = next((k for k, v in self._MODEL_ARTIFACT_DATA_TYPE_FORMAT.items() if v == data_type), None)
+            if artifact_type_from_data_type and artifact_type_from_data_type in self._ARTIFACT_DIRECTORY_KEY_MAP:
+                directory_key = self._ARTIFACT_DIRECTORY_KEY_MAP.get(artifact_type_from_data_type)
+            else:
+                raise ValueError(f"Internal error: Could not map data_type '{data_type}' to a valid artifact type directory.")
         else:
-             # If not found in either map, it's unsupported
-             all_supported_keys = list(self._DIRECTORY_KEY_MAP.keys()) + list(self._MODEL_ARTIFACT_DATA_TYPE_FORMAT.values())
-             raise ValueError(f"Unsupported data_type: '{data_type}'. Supported types: {all_supported_keys}")
+            all_supported_keys = list(self._DIRECTORY_KEY_MAP.keys()) + list(self._MODEL_ARTIFACT_DATA_TYPE_FORMAT.values())
+            raise ValueError(f"Unsupported data_type: '{data_type}'. Supported types: {all_supported_keys}")
 
 
         base_dir = self.paths.get(directory_key)
@@ -172,41 +181,46 @@ class DataManager:
 
 
         # Determine if a model_key subfolder is required based on the original artifact type
-        # We need to map the provided data_type back to an artifact_type to check ARTIFACT_TYPES_WITH_SUBFOLDER
-        artifact_type_check = next((k for k, v in self._MODEL_ARTIFACT_DATA_TYPE_FORMAT.items() if v == data_type), None)
+        # We need to consider *which* artifact type this data_type corresponds to.
+        # Check all artifact_types that map to this data_type in _MODEL_ARTIFACT_DATA_TYPE_FORMAT
+        artifact_types_for_data_type = [k for k, v in self._MODEL_ARTIFACT_DATA_TYPE_FORMAT.items() if v == data_type]
+        
+        needs_subfolder = any(at in self.ARTIFACT_TYPES_WITH_SUBFOLDER for at in artifact_types_for_data_type)
 
-        if artifact_type_check in self.ARTIFACT_TYPES_WITH_SUBFOLDER:
-             if model_key is None:
-                 raise ValueError(f"model_key is required for data_type '{data_type}'.")
 
-             # Ensure the model_key is lowercase and safe for filenames/folders
-             model_key_safe = model_key.lower().replace(' ', '_')
-             base_dir = base_dir / model_key_safe
-             # The directory will be created when saving, but we need the path here.
+        if needs_subfolder:
+            if model_key is None:
+                raise ValueError(f"model_key is required for data_type '{data_type}' as it corresponds to a subfoldered artifact type.")
+
+            # Ensure the model_key is lowercase and safe for filenames/folders
+            model_key_safe = model_key.lower().replace(' ', '_')
+            base_dir = base_dir / model_key_safe
+            # The directory will be created when saving, but we need the path here.
 
 
         # Construct filename
-        # Replace potentially problematic characters in symbol and interval
         safe_symbol = symbol.replace('/', '_').upper()
         safe_interval = interval.replace(':', '_')
 
-        # Determine file extension based on the provided data_type
         extension = '.pkl' # Default for artifacts and general objects
-        if data_type in ['raw', 'processed', 'labeled', 'backtesting_results', 'live_trading_results']:
-             extension = '.parquet' # DataFrames are typically saved as parquet
-        elif data_type == 'model': # Keras model saved via model.save
+        if data_type in [self._MODEL_ARTIFACT_DATA_TYPE_FORMAT['model']]: # Specifically check for 'model' as the base type for .keras
              extension = '.keras'
-        # Note: 'model_metadata', 'model_pipeline', 'evaluation', 'labeling_analysis', etc. will default to .pkl
+        elif data_type in self._DIRECTORY_KEY_MAP.keys(): # Raw, processed, labeled, results
+             extension = '.parquet'
+        # All other 'data_type' values from _MODEL_ARTIFACT_DATA_TYPE_FORMAT default to .pkl
 
 
         # Construct the filename pattern: SYMBOL_INTERVAL_datatype_suffix.extension
-        # The data_type itself (e.g., 'model_metadata', 'evaluation') is part of the filename
+        # The data_type itself (e.g., 'model', 'model_metadata') is part of the filename
         # If name_suffix is provided, it's appended directly
-        filename = f"{safe_symbol}_{safe_interval}_{data_type}{name_suffix}{extension}"
+        filename_core = f"{safe_symbol}_{safe_interval}_{data_type}"
+        if name_suffix:
+            filename_core += name_suffix
+
+        filename = f"{filename_core}{extension}"
 
 
         # Ensure the filename is safe (remove any remaining invalid characters if necessary)
-        # Simple example: remove characters not alphanumeric, underscore, hyphen, or dot
         filename = ''.join(c for c in filename if c.isalnum() or c in ['_', '.', '-'])
 
         return base_dir / filename
@@ -348,7 +362,8 @@ class DataManager:
             model_key (str): Key for the model configuration.
             artifact_type (str): Type of artifact ('pipeline', 'metadata', 'model',
                                  'preprocessor', 'evaluation', 'labeling_analysis',
-                                 'model_analysis', 'backtesting_analysis', 'live_trading_analysis').
+                                 'model_analysis', 'backtesting_analysis', 'live_trading_analysis',
+                                 'best_model_weights', 'model_weights').
                                  Must be a key in _ARTIFACT_DIRECTORY_KEY_MAP.
 
         Returns:
@@ -371,7 +386,7 @@ class DataManager:
              logger.error(f"Internal error: Could not find formatted data_type for artifact_type '{artifact_type}'.")
              raise ValueError(f"Internal error: Unsupported artifact_type '{artifact_type}'.")
 
-        # --- CORRECTED: Construct and pass the name_suffix ---
+        # --- Construct and pass the name_suffix which will include model_key and artifact_type for clarity ---
         # This must match how save_model_artifact constructs the suffix
         name_suffix = f'_{model_key}_{artifact_type}'
 
@@ -424,7 +439,8 @@ class DataManager:
             model_key (str): Key for the model configuration.
             artifact_type (str): Type of artifact ('pipeline', 'metadata', 'model',
                                  'preprocessor', 'evaluation', 'labeling_analysis',
-                                 'model_analysis', 'backtesting_analysis', 'live_trading_analysis').
+                                 'model_analysis', 'backtesting_analysis', 'live_trading_analysis',
+                                 'best_model_weights', 'model_weights').
                                  Must be a key in _ARTIFACT_DIRECTORY_KEY_MAP.
 
         Raises:
@@ -444,7 +460,7 @@ class DataManager:
              logger.error(f"Internal error: Could not find formatted data_type for artifact_type '{artifact_type}'.")
              raise ValueError(f"Internal error: Unsupported artifact_type '{artifact_type}'.")
 
-        # --- CORRECTED: Construct and pass the name_suffix ---
+        # --- Construct and pass the name_suffix which will include model_key and artifact_type for clarity ---
         # This must match how load_model_artifact will construct the suffix
         name_suffix = f'_{model_key}_{artifact_type}'
 

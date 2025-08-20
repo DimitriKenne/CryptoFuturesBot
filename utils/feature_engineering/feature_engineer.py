@@ -14,15 +14,11 @@ sys.path.append(str(PROJECT_ROOT))
 
 # --- Import configuration from central params.py ---
 try:
-    # Import the aggregated app_config object
     from config.params import app_config, FLOAT_EPSILON
-    # Import FeatureConfig and TemporalValidationConfig for type hints and instantiation
     from config.feature import FeatureConfig, TemporalValidationConfig
-    # Import the new modular processors
     from utils.feature_engineering.technical_indicator_calculator import TechnicalIndicatorCalculator
     from utils.feature_engineering.indicator_feature_processor import IndicatorFeatureProcessor
     from utils.feature_engineering.price_action_feature_processor import PriceActionFeatureProcessor
-    # Assuming TemporalSafetyError is defined in a custom exceptions.py file
     from utils.exceptions import TemporalSafetyError
 except ImportError as e:
     logging.error(f"Failed to import necessary modules: {e}")
@@ -30,10 +26,28 @@ except ImportError as e:
 
 logger = logging.getLogger(__name__)
 
+def log_nan_stats(df_before, df_after, stage_name, logger):
+    new_cols = [col for col in df_after.columns if col not in df_before.columns]
+    if not new_cols:
+        logger.info(f"{stage_name}: No new features added.")
+        return
+    nan_counts = df_after[new_cols].isna().sum()
+    total_nan_rows = df_after[new_cols].isna().any(axis=1).sum()
+    max_nan = nan_counts.max()
+    logger.info(
+        f"{stage_name}: {len(new_cols)} new features. "
+        f"Max NaN in any feature: {max_nan}. "
+        f"Rows with any NaN: {total_nan_rows}."
+    )
+    # Move details to debug level
+    logger.debug(f"{stage_name}: New columns: {new_cols}")
+    logger.debug(f"{stage_name}: NaN counts per new column:\n{nan_counts}")
+
 class FeatureEngineer:
     """
-    Engineers technical, statistical, and price action features from OHLCV data.
-    Acts as an orchestrator for specialized feature processors.
+    Orchestrates the feature engineering process. It manages the flow of data
+    through specialized sub-processors (IndicatorFeatureProcessor, PriceActionFeatureProcessor)
+    to ensure features are generated in a dependency-aware manner.
     Includes temporal safety checks to prevent lookahead bias.
     """
 
@@ -44,6 +58,7 @@ class FeatureEngineer:
         Args:
             config (Optional[FeatureConfig]): Configuration for feature parameters.
                 If None, uses app_config.features (from config/params.py).
+                If a dictionary is passed, instantiates FeatureConfig.
         """
         if config is None:
             self.config: FeatureConfig = copy.deepcopy(app_config.features)
@@ -61,7 +76,7 @@ class FeatureEngineer:
         self.logger.info("FeatureEngineer initialized with feature configuration.")
         self.logger.info(f"Temporal safety validation enabled: {self.config.temporal_validation.enabled}")
 
-        # Initialize modular feature processors
+        # Initialize modular feature processors - they receive the same config
         self.indicator_processor = IndicatorFeatureProcessor(config=self.config)
         self.price_action_processor = PriceActionFeatureProcessor(config=self.config)
 
@@ -70,14 +85,34 @@ class FeatureEngineer:
         """
         Calculates the maximum lookback required across all types of feature engineering.
         This is the number of *previous* bars needed to calculate features for the latest bar.
+        This calculation needs to consider the maximum lookback of *all* individual features
+        and their dependencies, including any internal shifts within sub-processors.
+        For simplicity, we can defer to the sub-processors and add a buffer.
         """
-        # Sum of maximum lookbacks from each sub-processor, plus a small buffer
-        max_lookback = max(
+        # Get maximum lookback from individual processors (which should account for their internal shifts)
+        max_sub_processor_lookback = max(
             self.indicator_processor.required_lookback,
             self.price_action_processor.required_lookback
         )
-        # Add 1 for the current bar itself and potentially one more for shifts if the base data is already shifted
-        return max_lookback + 2 # A small buffer
+        
+        # Consider additional lookback for FVG (if not handled by price_action_processor's lookback)
+        fvg_lookback = self.config.fvg_lookback_bars if self.config.fvg_lookback_bars > 0 else 0
+
+        # Consider lagged and differenced features that are applied at the end
+        max_lag = 0
+        if self.config.lagged_features:
+            max_lag = max([max(lags) for lags in self.config.lagged_features.values()] + [0])
+        max_diff = 0
+        if self.config.differenced_features:
+            max_diff = max([max(orders) for orders in self.config.differenced_features.values()] + [0])
+
+        # The overall required lookback is the maximum of all these, plus a small buffer
+        # Added +2 as a general safety margin for potential shifts or calculations involving multiple past bars.
+        calculated_lookback = max(max_sub_processor_lookback, fvg_lookback, max_lag, max_diff) + 2 
+
+        self.logger.debug(f"Calculated required lookback for FeatureEngineer: {calculated_lookback} bars.")
+        return calculated_lookback + 800
+
 
     def _validate_dataframe(self, df: pd.DataFrame):
         """
@@ -113,15 +148,14 @@ class FeatureEngineer:
         These are calculated based on past data to ensure temporal safety.
         """
         df_transformed = pd.DataFrame(index=df.index)
-        # Shift close prices for log returns to prevent lookahead
-        # log_returns is usually based on (current / previous) or (current / future)
-        # For current bar `t`, we use `close[t-1] / close[t-2]`
+        
+        # Log returns use previous two close prices
         df_transformed['log_returns'] = np.log(df['close'].shift(1) / df['close'].shift(2))
         
         # Typical price of the *previous* bar
         df_transformed['typical_price'] = (df['high'].shift(1) + df['low'].shift(1) + df['close'].shift(1)) / 3
 
-        # Add other essential price differences based on *shifted* data
+        # Other essential price differences based on *shifted* data
         df_transformed['mid_price'] = (df['high'].shift(1) + df['low'].shift(1)) / 2
         df_transformed['body_range'] = df['high'].shift(1) - df['low'].shift(1)
         df_transformed['open_close_diff'] = df['close'].shift(1) - df['open'].shift(1)
@@ -161,7 +195,26 @@ class FeatureEngineer:
         self.logger.debug("Differenced features added.")
         return df_differenced
 
-    def _validate_temporal_safety(self, df: pd.DataFrame) -> List[str]:
+    def _log_nan_stats(self, df_before, df_after, stage_name):
+        logger = self.logger
+        new_cols = [col for col in df_after.columns if col not in df_before.columns]
+        if not new_cols:
+            logger.info(f"{stage_name}: No new features added.")
+            return
+        nan_counts = df_after[new_cols].isna().sum()
+        total_nan_rows = df_after[new_cols].isna().any(axis=1).sum()
+        max_nan = nan_counts.max()
+        logger.info(
+            f"{stage_name}: {len(new_cols)} new features. "
+            f"Max NaN in any feature: {max_nan}. "
+            f"Rows with any NaN: {total_nan_rows}."
+        )
+        # Move details to debug level
+        logger.debug(f"{stage_name}: New columns: {new_cols}")
+        logger.debug(f"{stage_name}: NaN counts per new column:\n{nan_counts}")
+
+
+    def _validate_temporal_safety(self, df):
         """
         Performs enhanced temporal safety validation by checking correlation
         between each feature and the *next* period's close price change.
@@ -193,11 +246,14 @@ class FeatureEngineer:
             'is_above_pp', 'is_below_pp', 'is_above_r1', 'is_below_r1',
             'is_above_s1', 'is_below_s1', 'is_above_r2', 'is_below_r2',
             'is_above_s2', 'is_below_s2', 'is_above_r3', 'is_below_r3',
-            'is_above_s3', 'is_below_s3', # Added missing _s3
+            'is_above_s3', 'is_below_s3',
             'is_above_swing_high', 'is_below_swing_low',
             'is_support_broken_strong_vol', 'is_resistance_broken_strong_vol',
             'is_bull_wick_at_resistance', 'is_bear_wick_at_support'
         ]
+        # Add candlestick pattern signals to the skip list
+        for pattern in self.config.candlestick_patterns:
+            cols_to_skip_correlation.append(f'pattern_{pattern}_signal')
         
         # Filter features to check for correlation: only numeric features not in OHLCV and not in skip list
         feature_cols = [col for col in df.columns 
@@ -236,65 +292,117 @@ class FeatureEngineer:
         return violating_features
 
 
-    def process(self, df: pd.DataFrame) -> pd.DataFrame:
+    def process(self, df: pd.DataFrame, interval: str = None) -> pd.DataFrame:
         """
-        Processes raw OHLCV data to generate all technical, statistical, and price action features.
-        Initial rows affected by lookback periods will contain NaN values.
-        Performs temporal safety checks if enabled.
+        Orchestrates the processing of raw OHLCV data to generate all technical,
+        statistical, and price action features in a dependency-aware manner.
+        Accepts interval for correct ADR calculation.
         """
-        self.logger.info("Starting general feature engineering process.")
+        self.logger.info("🚦 Starting general feature engineering process.")
         self._validate_dataframe(df)
         
+        # Use interval from argument, else from config, else default to '1d'
+        interval_to_use = interval or getattr(self.config, "interval", "1d")
+
         df_processed = df.copy()
 
-        # 1. Add basic price transformations (e.g., log returns, typical price)
+        # --- Stage 1: Basic Price Transformations and Core Indicators ---
+        self.logger.info("Stage 1: Adding basic price transformations and core technical indicators.")
+        df_before = df_processed.copy()
         df_price_transforms = self._add_price_transformations(df)
         df_processed = pd.concat([df_processed, df_price_transforms], axis=1)
+        log_nan_stats(df_before, df_processed, "Stage 1 - Price Transformations", self.logger)
 
-        # 2. Add technical and statistical indicators, including derived ones
-        # This MUST run before price action features that depend on indicators like volume_osc.
-        df_tech_stats = self.indicator_processor.add_all_technical_and_derived_features(df_processed)
-        df_processed = pd.concat([df_processed, df_tech_stats], axis=1)
+        df_before = df_processed.copy()
+        # Pass interval to indicator processor for ADR calculation
+        df_core_indicators = self.indicator_processor.add_core_technical_indicators(df_processed, interval=interval_to_use)
+        df_processed = pd.concat([df_processed, df_core_indicators], axis=1)
+        log_nan_stats(df_before, df_processed, "Stage 1 - Core Indicators", self.logger)
 
-        # 3. Add price action features (patterns, pivots, S/R, breakouts)
-        # Now, df_processed contains OHLCV, price transforms, AND technical indicators,
-        # so price action features (e.g., breakouts) will have access to all their dependencies.
-        df_price_action = self.price_action_processor.add_all_price_action_features(df_processed)
-        df_processed = pd.concat([df_processed, df_price_action], axis=1)
+        df_before = df_processed.copy()
+        df_patterns_fvg = self.price_action_processor.add_custom_pattern_features(df_processed)
+        df_processed = pd.concat([df_processed, df_patterns_fvg], axis=1)
+        log_nan_stats(df_before, df_processed, "Stage 1 - Patterns/FVG", self.logger)
+        self.logger.info("Stage 1 complete. DataFrame shape: %s", df_processed.shape)
 
-        # 4. Add lagged and differenced features (applied to all features generated so far)
+        # --- Stage 2: Mid-Level Price Action Features (Pivots, S/R) ---
+        self.logger.info("Stage 2: Adding pivot point and support/resistance features.")
+        df_before = df_processed.copy()
+        df_pivots = self.price_action_processor.add_pivot_point_features(df_processed)
+        df_processed = pd.concat([df_processed, df_pivots], axis=1)
+        log_nan_stats(df_before, df_processed, "Stage 2 - Pivot Points", self.logger)
+
+        df_before = df_processed.copy()
+        df_sr = self.price_action_processor.add_support_resistance_features(df_processed)
+        df_processed = pd.concat([df_processed, df_sr], axis=1)
+        log_nan_stats(df_before, df_processed, "Stage 2 - Support/Resistance", self.logger)
+        self.logger.info("Stage 2 complete. DataFrame shape: %s", df_processed.shape)
+
+        # --- Stage 3: Derived Features and Breakouts ---
+        self.logger.info("Stage 3: Adding derived features and breakout patterns.")
+        df_before = df_processed.copy()
+        df_derived_indicators = self.indicator_processor.add_derived_features(df_processed)
+        df_processed = pd.concat([df_processed, df_derived_indicators], axis=1)
+        log_nan_stats(df_before, df_processed, "Stage 3 - Derived Indicators", self.logger)
+
+        df_before = df_processed.copy()
+        df_breaks = self.price_action_processor.add_breakout_features(df_processed)
+        df_processed = pd.concat([df_processed, df_breaks], axis=1)
+        log_nan_stats(df_before, df_processed, "Stage 3 - Breakouts", self.logger)
+        self.logger.info("Stage 3 complete. DataFrame shape: %s", df_processed.shape)
+
+        # --- Stage 4: Lagged and Differenced Features ---
+        self.logger.info("Stage 4: Adding lagged and differenced features.")
+        df_before = df_processed.copy()
         df_lagged = self._add_lagged_features(df_processed)
         df_processed = pd.concat([df_processed, df_lagged], axis=1)
+        log_nan_stats(df_before, df_processed, "Stage 4 - Lagged Features", self.logger)
 
+        df_before = df_processed.copy()
         df_differenced = self._add_differenced_features(df_processed)
         df_processed = pd.concat([df_processed, df_differenced], axis=1)
+        log_nan_stats(df_before, df_processed, "Stage 4 - Differenced Features", self.logger)
+        self.logger.info("Stage 4 complete. DataFrame shape: %s", df_processed.shape)
 
+        # --- Stage 5: Final Type Conversions, NaN Handling & Temporal Validation ---
+        self.logger.info("Stage 5: Performing final type conversions and temporal validation.")
         df_with_nan = df_processed.copy()
 
         # Convert appropriate columns to nullable integer types (for binary/categorical features)
-        # This list should ideally be dynamic or clearly defined based on expected outputs
-        categorical_cols = [
-            'fvg', 'volatility_regime', 'pattern_cluster',
-            'is_above_pp', 'is_below_pp', 'is_above_r1', 'is_below_r1',
-            'is_above_s1', 'is_below_s1', 'is_above_r2', 'is_below_r2',
-            'is_above_s2', 'is_below_s2', 'is_above_r3', 'is_below_r3',
-            'is_above_s3', 'is_below_s3',
+        # These lists are constructed dynamically based on config and expected outputs
+        categorical_cols = ['fvg', 'volatility_regime', 'pattern_cluster'] # pattern_cluster is now sum, can be int/float
+        
+        # Standard pivot binary columns
+        standard_pivot_binary_cols = []
+        if self.config.pivot_point_method == 'standard':
+            for p_col in ['pp', 'r1', 's1', 'r2', 's2', 'r3', 's3']:
+                standard_pivot_binary_cols.append(f'is_above_{p_col}')
+                standard_pivot_binary_cols.append(f'is_below_{p_col}')
+        categorical_cols.extend([col for col in standard_pivot_binary_cols if col in df_with_nan.columns])
+
+        # Swing pivot and breakout binary columns
+        swing_pivot_binary_cols = [
             'is_above_swing_high', 'is_below_swing_low',
             'is_support_broken_strong_vol', 'is_resistance_broken_strong_vol',
             'is_bull_wick_at_resistance', 'is_bear_wick_at_support'
         ]
-        # Add candlestick pattern signals
+        categorical_cols.extend([col for col in swing_pivot_binary_cols if col in df_with_nan.columns])
+
+        # Add candlestick pattern signals to the list for type casting
         for pattern in self.config.candlestick_patterns:
-            categorical_cols.append(f'pattern_{pattern}_signal')
+            col_name = f'pattern_{pattern}_signal'
+            if col_name not in categorical_cols: # Avoid duplicates if defined elsewhere
+                categorical_cols.append(col_name)
 
         for col in categorical_cols:
              if col in df_with_nan.columns:
                   # Ensure conversion only for columns that are actually binary (0, 1, -1)
                   # and are not already float-based sums (like pattern_cluster)
-                  if df_with_nan[col].dropna().isin([0, 1, -1]).all(): # Check if values are binary/ternary
+                  # Also, check if the column isn't all NaNs before attempting conversion
+                  if not df_with_nan[col].dropna().empty and df_with_nan[col].dropna().isin([0, 1, -1]).all():
                     df_with_nan.loc[:, col] = df_with_nan[col].astype(pd.Int8Dtype())
                   else:
-                    self.logger.debug(f"Column '{col}' contains values outside of [0, 1, -1] or NaNs. Not casting to Int8Dtype.")
+                    self.logger.debug(f"Column '{col}' contains values outside of [0, 1, -1], is all NaNs, or is not applicable for Int8Dtype conversion. Not casting.")
              else:
                   self.logger.debug(f"Categorical column '{col}' not found in DataFrame to cast type.")
 
@@ -313,5 +421,20 @@ class FeatureEngineer:
         else:
             self.logger.info("Temporal safety validation skipped as per configuration.")
 
-        return df_with_nan
+        # Drop initial rows with NaNs caused by lookback periods, if configured
+        if self.config.remove_nan_rows:
+            original_shape = df_with_nan.shape
+            ohlcv_and_index_cols = ['open', 'high', 'low', 'close', 'volume', df_with_nan.index.name if df_with_nan.index.name else '']
+            feature_cols_for_nan_check = [col for col in df_with_nan.columns if col not in ohlcv_and_index_cols]
+            df_final = df_with_nan.dropna(subset=feature_cols_for_nan_check)
+            self.logger.info(f"Removed {original_shape[0] - df_final.shape[0]} rows with NaNs from feature columns. Final shape: {df_final.shape}")
+        else:
+            df_final = df_with_nan
+            self.logger.info("NaN row removal skipped as per configuration.")
 
+        self.logger.info(
+            f"Feature engineering summary: {df_final.shape[1]} features, "
+            f"{df_final.shape[0]} rows after NaN removal."
+        )
+        self.logger.info("Feature engineering process completed.")
+        return df_final

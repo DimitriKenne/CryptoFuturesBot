@@ -16,6 +16,15 @@ def validate_general_config(config):
         raise ValueError("hyperparameter_tuning_n_iter must be > 0.")
     if config.hyperparameter_tuning_cv_folds <= 0:
         raise ValueError("hyperparameter_tuning_cv_folds must be > 0.")
+    
+    # New validations for dynamic trade loop interval
+    if not isinstance(config.data_granularity_minutes, (int, float)) or config.data_granularity_minutes <= 0:
+        raise ValueError("data_granularity_minutes must be a positive number.")
+    if not isinstance(config.min_trade_loop_interval_seconds, (int, float)) or config.min_trade_loop_interval_seconds <= 0:
+        raise ValueError("min_trade_loop_interval_seconds must be a positive number.")
+    if not isinstance(config.polling_frequency_factor, float) or not (0 < config.polling_frequency_factor < 1):
+        raise ValueError("polling_frequency_factor must be a float between 0 and 1 (exclusive).")
+
 
 def validate_feature_config(config: FeatureConfig):
     """
@@ -280,3 +289,4 @@ def validate_config(config):
     elif name == "LabelConfig":
         validate_label_config(config)
     # Add more elifs for other config types as needed
+

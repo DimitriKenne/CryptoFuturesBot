@@ -1,9 +1,11 @@
-# utils/exchange_interface.py
+# utils/exchange_adapters/exchange_interface.py
 
 from abc import ABC, abstractmethod
 from typing import Dict, Any, List, Optional, Tuple
 import pandas as pd
 import logging # Import logging here
+from config.exchange import ExchangeConfig
+import asyncio # Import asyncio for async operations
 
 class ExchangeInterface(ABC):
     """
@@ -13,7 +15,7 @@ class ExchangeInterface(ABC):
     exchanges by simply swapping out the adapter.
     """
 
-    def __init__(self, symbol: str, leverage: int, logger: Any, config: Dict[str, Any]):
+    def __init__(self, symbol: str, leverage: int, logger: Any, config: ExchangeConfig):
         """
         Initializes the exchange interface with common parameters.
 
@@ -27,18 +29,27 @@ class ExchangeInterface(ABC):
         self.leverage = leverage
         self.logger = logger
         self.config = config
-        self.testnet = config.get('testnet', True) # Default to testnet for safety
+        self.testnet = config.testnet # Default to testnet for safety
         # These will be updated by the concrete adapter from exchange info
-        self.price_precision = config.get('price_precision')
-        self.quantity_precision = config.get('quantity_precision')
-        self.min_quantity = config.get('min_quantity')
-        self.min_notional = config.get('min_notional')
+        self.price_precision = config.price_precision
+        self.quantity_precision = config.quantity_precision
+        self.min_quantity = config.min_quantity
+        self.min_notional = config.min_notional
 
     @abstractmethod
     async def async_setup(self):
         """
         Performs asynchronous setup for the exchange connection, e.g., setting leverage.
         This method should be called once after the bot starts.
+        """
+        pass
+
+    @abstractmethod
+    def set_client(self, client: Any):
+        """
+        Sets the underlying exchange client after it has been initialized and connected.
+        This is crucial for components that need the client but might be initialized
+        before the client itself is fully ready (e.g., in __init__).
         """
         pass
 
@@ -292,3 +303,4 @@ class ExchangeInterface(ABC):
         Closes any open connections to the exchange (e.g., websockets).
         """
         pass
+

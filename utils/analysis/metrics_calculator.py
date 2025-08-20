@@ -25,17 +25,8 @@ class MetricsCalculator:
     def calculate_all_metrics(self, trade_history_df: pd.DataFrame, equity_df: pd.DataFrame, symbol: str, interval: str) -> Dict[str, Any]:
         """
         Calculates a comprehensive set of performance metrics.
-
-        Args:
-            trade_history_df (pd.DataFrame): DataFrame of closed trades.
-            equity_df (pd.DataFrame): DataFrame with 'equity' column representing the equity curve.
-            symbol (str): Trading pair symbol.
-            interval (str): Data interval.
-
-        Returns:
-            Dict[str, Any]: A dictionary of calculated performance metrics.
         """
-        self.logger.info("Calculating summary metrics...")
+        self.logger.info(f"\n{'-'*30}\n📏 Calculating Summary Metrics\n{'-'*30}")
         metrics: Dict[str, Any] = {}
 
         # Set bars_per_year based on the interval passed
@@ -48,14 +39,14 @@ class MetricsCalculator:
 
         # Handle empty equity curve scenarios
         if equity_df.empty or 'equity' not in equity_df.columns or equity_df['equity'].empty:
-            self.logger.warning("Equity curve is empty or invalid. Cannot calculate most performance metrics.")
+            self.logger.warning("⚠️ Equity curve is empty or invalid. Cannot calculate most performance metrics.")
             metrics["Error"] = "No equity curve to calculate metrics."
             metrics.update({
                 'Total Return (%)': np.nan, 'CAGR (%)': np.nan, 'Sharpe Ratio': np.nan,
                 'Sortino Ratio': np.nan, 'Max Drawdown (%)': np.nan, 'Final Equity': np.nan,
                 'Peak Equity': np.nan, 'Equity Change': np.nan
             })
-            metrics.update(self._get_trade_metrics(pd.DataFrame(), interval)) # Pass empty DF for trade metrics
+            metrics.update(self._get_trade_metrics(pd.DataFrame(), interval))
             metrics["PnL Consistency Check"] = "Unavailable"
             return metrics
 
@@ -128,7 +119,7 @@ class MetricsCalculator:
         # PnL Consistency Check
         metrics.update({"PnL Consistency Check": self._check_pnl_consistency(metrics)})
 
-        self.logger.info("Summary metrics calculated successfully.")
+        self.logger.info("✅ Summary metrics calculated successfully.")
         return metrics
 
     def _get_trade_metrics(self, trades_df: pd.DataFrame, interval: str) -> Dict[str, Any]:
@@ -217,37 +208,31 @@ class MetricsCalculator:
 
     def _check_pnl_consistency(self, metrics: Dict[str, Any]) -> str:
         """
-        Checks if the final equity change (from equity curve) matches the sum of net PnLs from trades.
-        This provides an internal consistency check for the backtester/manager.
+        Checks if the final equity change matches the sum of net PnLs from trades.
         """
         try:
             final_equity = float(metrics.get('Final Equity', self.initial_capital))
         except (ValueError, TypeError):
-            final_equity = self.initial_capital # Fallback if conversion fails
+            final_equity = self.initial_capital
 
         equity_change = final_equity - self.initial_capital
         
         try:
             total_net_pnl_from_trades = float(metrics.get('Total Net PnL (Sum Trades)', 0.0))
         except (ValueError, TypeError):
-            total_net_pnl_from_trades = 0.0 # Fallback if conversion fails
-
+            total_net_pnl_from_trades = 0.0
 
         if pd.notna(equity_change) and pd.notna(total_net_pnl_from_trades):
             discrepancy = abs(equity_change - total_net_pnl_from_trades)
-            # Define a tolerance for floating point comparison
-            tolerance = max(abs(self.initial_capital * 1e-6), 1e-4) # Example: 0.0001% of capital or 0.0001 units
+            tolerance = max(abs(self.initial_capital * 1e-6), 1e-4)
 
             if discrepancy > tolerance:
-                self.logger.critical(f"CRITICAL PNL DISCREPANCY DETECTED!")
-                self.logger.critical(f"  Equity Change (Final - Initial): {equity_change:.6f}")
-                self.logger.critical(f"  Sum of Trade Net PnLs:         {total_net_pnl_from_trades:.6f}")
-                self.logger.critical(f"  Discrepancy:                    {discrepancy:.6f}")
+                self.logger.critical(f"\n{'!'*30}\n❌ CRITICAL PNL DISCREPANCY DETECTED!\nEquity Change: {equity_change:.6f}\nSum of Trade Net PnLs: {total_net_pnl_from_trades:.6f}\nDiscrepancy: {discrepancy:.6f}\n{'!'*30}")
                 return f"FAIL (Discrepancy: {discrepancy:.6f})"
             else:
-                self.logger.info(f"PnL Consistency Check Passed (Discrepancy: {discrepancy:.6f})")
+                self.logger.info(f"✅ PnL Consistency Check Passed (Discrepancy: {discrepancy:.6f})")
                 return "PASS"
         else:
-            self.logger.warning("Could not perform PnL consistency check due to missing/invalid metrics.")
+            self.logger.warning("⚠️ Could not perform PnL consistency check due to missing/invalid metrics.")
             return "Unavailable"
 

@@ -7,7 +7,7 @@ import os
 @dataclass
 class TelegramConfig:
     """Telegram notification settings."""
-    enabled: bool = False
+    enabled: bool = True
     token: str = field(default_factory=lambda: os.getenv('TELEGRAM_BOT_TOKEN', ''))
     chat_id: str = field(default_factory=lambda: os.getenv('TELEGRAM_CHAT_ID', ''))
 

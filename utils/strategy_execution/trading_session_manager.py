@@ -52,17 +52,24 @@ class TradingSessionManager:
         self._current_capital: float = self.initial_capital
         self._open_position: Optional[Dict[str, Any]] = None # Details of the single open trade
         self._trade_history: List[Dict[str, Any]] = [] # List of completed trade records
-        # Equity curve will be a Series, indexed by datetime, with initial capital at start
-        self._equity_curve: pd.Series = pd.Series(dtype=float)
-        # Store initial equity for cases where equity curve starts before any data points
-        self._equity_curve.loc[datetime.now(timezone.utc)] = self.initial_capital
-
 
         self.logger.info(f"TradingSessionManager initialized with initial capital: {self.initial_capital:.2f}")
 
     # ====================================================================
     # --- State Management Methods ---
     # ====================================================================
+    
+    def initialize_equity_curve(self, first_bar_time: Union[datetime, pd.Timestamp], initial_capital: float):
+        """
+        Initializes the equity curve for the trading session.
+
+        Args:
+            first_bar_time (Union[datetime, pd.Timestamp]): The timestamp of the first bar in the backtest.
+            initial_capital (float): The initial capital for the trading session.
+        """
+        self._equity_curve: pd.Series = pd.Series(dtype=float)
+        # Store initial equity for cases where equity curve starts before any data points
+        self._equity_curve.loc[first_bar_time] = initial_capital
 
     def load_state(self, symbol: str, interval: str, model_type: str, is_live_trading: bool):
         """
@@ -349,7 +356,13 @@ class TradingSessionManager:
                 self.logger.warning(f"Net PnL for trade {completed_trade_details.get('exit_reason')} is NaN. Not updating capital for this trade.")
 
             self._current_capital += net_pnl # Update capital with realized PnL
-            self.logger.debug(f"Trade added to history. Reason: {completed_trade_details.get('exit_reason')}. Net PnL: {net_pnl:.2f}. New capital: {self._current_capital:.2f}")
+            self.logger.info(
+                f"Trade recorded: {completed_trade_details.get('direction_str','?').upper()} "
+                f"Entry @ {completed_trade_details.get('entry_price',0):.4f}, "
+                f"Exit @ {completed_trade_details.get('exit_price',0):.4f}, "
+                f"NetPnL: {net_pnl:.2f}, Reason: {completed_trade_details.get('exit_reason','?')}, "
+                f"Updated Capital: {self._current_capital:.2f}"
+            )
         else:
             self.logger.warning("Attempted to add empty or invalid trade details to history. Capital not updated.")
 
@@ -384,7 +397,7 @@ class TradingSessionManager:
         self._equity_curve.loc[timestamp] = current_equity
         # Ensure the equity curve is always sorted by its index
         self._equity_curve = self._equity_curve.sort_index()
-        self.logger.debug(f"Equity curve updated at {timestamp}: {current_equity:.2f}")
+        self.logger.info(f"Equity curve updated: {timestamp} -> {current_equity:.2f}")
 
 
     # ====================================================================
@@ -452,4 +465,39 @@ class TradingSessionManager:
         direction_int = 1 if direction_str == 'long' else -1
         unrealized_pnl = (current_price - entry_price) * quantity * direction_int
         return unrealized_pnl
+
+    def close_position(self, completed_trade_details: Dict[str, Any]):
+        """
+        Closes the currently open position:
+        - Adds the completed trade to history and updates capital.
+        - Clears the open position.
+        - Updates the equity curve with the new capital at the exit timestamp.
+        - Logs a concise, user-friendly summary.
+        """
+        if not completed_trade_details:
+            self.logger.warning("⚠️ Attempted to close position with empty trade details. No action taken.")
+            return
+
+        # Add trade to history and update capital
+        self.add_completed_trade(completed_trade_details)
+
+        # Clear open position
+        self.clear_open_position()
+
+        # Update equity curve at the exit timestamp
+        exit_time = completed_trade_details.get('exit_time')
+        final_capital = self.get_current_capital()
+        if exit_time is not None:
+            self.update_equity_curve(final_capital, exit_time)
+            self.logger.info(
+                f"\n{'-'*30}\n"
+                f"✅ Position Closed\n"
+                f"Exit @ {completed_trade_details.get('exit_price', 0):.4f} | "
+                f"NetPnL: {completed_trade_details.get('net_pnl', 0.0):.2f} | "
+                f"Final Capital: {final_capital:.2f} | "
+                f"Exit Time: {exit_time}\n"
+                f"{'-'*30}"
+            )
+        else:
+            self.logger.warning("⚠️ No exit_time found in completed trade details. Equity curve not updated for this trade.")
 

@@ -94,26 +94,29 @@ class IndicatorFeatureProcessor:
         return max_period_size + 1 # +1 for the shift operation before calculation
 
 
-    def _add_momentum_indicators(self, df: pd.DataFrame) -> pd.DataFrame:
+    def add_core_technical_indicators(self, df: pd.DataFrame, interval: str) -> pd.DataFrame:
         """
-        Adds various momentum indicators (RSI, Stochastic, Awesome Oscillator, CCI, MFI).
+        Adds base momentum, trend, volatility, volume, and statistical indicators.
         Calculations are based on past data for temporal safety.
         """
-        df_momentum = pd.DataFrame(index=df.index)
+        df_core_indicators = pd.DataFrame(index=df.index)
 
         if not ta_lib_available:
-            self.logger.warning("TA library not available. Skipping momentum indicator calculations.")
-            return df_momentum # Return empty if library is missing
+            self.logger.warning("TA library not available. Skipping core technical indicator calculations.")
+            return df_core_indicators # Return empty if library is missing
 
         # Shift input data for temporal safety (indicators calculated on previous bar's OHLCV)
+        # These shifted series will be used for all indicator calculations in this method.
+        # This ensures that an indicator value at time T uses data up to T-1.
         df_shifted = df[['open', 'high', 'low', 'close', 'volume']].shift(1)
         shifted_high = df_shifted['high']
         shifted_low = df_shifted['low']
         shifted_close = df_shifted['close']
         shifted_volume = df_shifted['volume']
 
+        # --- Momentum Indicators ---
         for period in self.config.rsi_periods:
-             df_momentum[f'rsi_{period}'] = TechnicalIndicatorCalculator.calculate_rsi(shifted_close, period)
+             df_core_indicators[f'rsi_{period}'] = TechnicalIndicatorCalculator.calculate_rsi(shifted_close, period)
 
         stoch_d_period = 3 # This is often a fixed standard for the %D line
         for period_k in self.config.stochastic_periods:
@@ -121,160 +124,98 @@ class IndicatorFeatureProcessor:
                 high_prices=shifted_high, low_prices=shifted_low, close_prices=shifted_close,
                 window=period_k, smooth_window=stoch_d_period
             )
-            df_momentum[f'stoch_k_{period_k}'] = stoch_results['stoch']
-            df_momentum[f'stoch_d_{period_k}'] = stoch_results['stoch_signal']
+            df_core_indicators[f'stoch_k_{period_k}'] = stoch_results['stoch']
+            df_core_indicators[f'stoch_d_{period_k}'] = stoch_results['stoch_signal']
 
         if len(self.config.ao_periods) == 2:
              ao_result = TechnicalIndicatorCalculator.calculate_awesome_oscillator(
                  high_prices=shifted_high, low_prices=shifted_low,
                  window1=self.config.ao_periods[0], window2=self.config.ao_periods[1]
              )
-             df_momentum['ao'] = ao_result
+             df_core_indicators['ao'] = ao_result
         else:
              self.logger.warning(f"AO periods not correctly configured as a pair (expected 2, got {len(self.config.ao_periods)}): {self.config.ao_periods}. Skipping AO feature.")
-             df_momentum['ao'] = np.nan # Ensure column exists
+             df_core_indicators['ao'] = np.nan # Ensure column exists
 
         for period in self.config.cci_periods:
-            df_momentum[f'cci_{period}'] = TechnicalIndicatorCalculator.calculate_cci(
+            df_core_indicators[f'cci_{period}'] = TechnicalIndicatorCalculator.calculate_cci(
                 high_prices=shifted_high, low_prices=shifted_low, close_prices=shifted_close, window=period
             )
 
         for period in self.config.mfi_periods:
-             df_momentum[f'mfi_{period}'] = TechnicalIndicatorCalculator.calculate_mfi(
+             df_core_indicators[f'mfi_{period}'] = TechnicalIndicatorCalculator.calculate_mfi(
                  high_prices=shifted_high, low_prices=shifted_low, close_prices=shifted_close,
                  volume=shifted_volume, window=period
              )
 
         self.logger.debug("Momentum indicators added.")
-        return df_momentum
 
 
-    def _add_trend_indicators(self, df: pd.DataFrame) -> pd.DataFrame:
-        """
-        Adds various trend indicators (SMA, EMA, MACD).
-        Calculations are based on past data for temporal safety.
-        """
-        df_trend = pd.DataFrame(index=df.index)
-
-        if not ta_lib_available:
-            self.logger.warning("TA library not available. Skipping trend indicator calculations.")
-            return df_trend
-
-        shifted_close = df['close'].shift(1)
-
+        # --- Trend Indicators ---
         for period in self.config.sma_periods:
-            df_trend[f'sma_{period}'] = TechnicalIndicatorCalculator.calculate_sma(shifted_close, period)
+            df_core_indicators[f'sma_{period}'] = TechnicalIndicatorCalculator.calculate_sma(shifted_close, period)
 
         for period in self.config.ema_periods:
-            df_trend[f'ema_{period}'] = TechnicalIndicatorCalculator.calculate_ema(shifted_close, period)
+            df_core_indicators[f'ema_{period}'] = TechnicalIndicatorCalculator.calculate_ema(shifted_close, period)
 
         macd_results = TechnicalIndicatorCalculator.calculate_macd(shifted_close)
-        df_trend['macd'] = macd_results['macd']
-        df_trend['macd_signal'] = macd_results['macd_signal']
-        df_trend['macd_diff'] = macd_results['macd_diff']
+        df_core_indicators['macd'] = macd_results['macd']
+        df_core_indicators['macd_signal'] = macd_results['macd_signal']
+        df_core_indicators['macd_diff'] = macd_results['macd_diff']
 
         self.logger.debug("Trend indicators added.")
-        return df_trend
 
 
-    def _add_volatility_indicators(self, df: pd.DataFrame) -> pd.DataFrame:
-        """
-        Adds various volatility indicators (ATR, Bollinger Bands).
-        Calculations are based on past data for temporal safety.
-        """
-        df_volatility = pd.DataFrame(index=df.index)
-
-        if not ta_lib_available:
-            self.logger.warning("TA library not available. Skipping volatility indicator calculations.")
-            return df_volatility
-
-        # Shift input data for temporal safety
-        df_shifted = df[['high', 'low', 'close']].shift(1)
-        shifted_high = df_shifted['high']
-        shifted_low = df_shifted['low']
-        shifted_close = df_shifted['close']
-
+        # --- Volatility Indicators ---
         for period in self.config.atr_periods:
-             # ATR needs (high, low, close) of *previous* bar, use shifted_data
-             df_volatility[f'atr_{period}'] = TechnicalIndicatorCalculator.calculate_atr(
+             df_core_indicators[f'atr_{period}'] = TechnicalIndicatorCalculator.calculate_atr(
                  high_prices=shifted_high,
                  low_prices=shifted_low,
                  close_prices=shifted_close,
                  window=period
              )
-             # Log status of ATR calculation
-             if f'atr_{period}' in df_volatility.columns:
-                 num_nans = df_volatility[f'atr_{period}'].isnull().sum()
-                 num_zeros = (df_volatility[f'atr_{period}'] == 0).sum()
-                 self.logger.debug(f"ATR column 'atr_{period}' status: {num_nans} NaNs, {num_zeros} zeros out of {len(df_volatility)} rows.")
+             if f'atr_{period}' in df_core_indicators.columns:
+                 num_nans = df_core_indicators[f'atr_{period}'].isnull().sum()
+                 num_zeros = (df_core_indicators[f'atr_{period}'] == 0).sum()
+                 self.logger.debug(f"ATR column 'atr_{period}' status: {num_nans} NaNs, {num_zeros} zeros out of {len(df_core_indicators)} rows.")
              else:
                  self.logger.debug(f"ATR column 'atr_{period}' was not created.")
 
         for period in self.config.bollinger_periods:
             bb_results = TechnicalIndicatorCalculator.calculate_bollinger_bands(shifted_close, period)
-            df_volatility[f'bb_upper_{period}'] = bb_results['hband']
-            df_volatility[f'bb_lower_{period}'] = bb_results['lband']
-            df_volatility[f'bb_width_{period}'] = bb_results['wband'] # Width is often used as a feature
+            df_core_indicators[f'bb_upper_{period}'] = bb_results['hband']
+            df_core_indicators[f'bb_lower_{period}'] = bb_results['lband']
+            df_core_indicators[f'bb_width_{period}'] = bb_results['wband'] # Width is often used as a feature
 
         self.logger.debug("Volatility indicators added.")
-        return df_volatility
 
 
-    def _add_volume_indicators(self, df: pd.DataFrame) -> pd.DataFrame:
-        """
-        Adds various volume indicators (OBV, CMF, Volume Oscillator).
-        Calculations are based on past data for temporal safety.
-        """
-        df_volume = pd.DataFrame(index=df.index)
-
-        if not ta_lib_available:
-            self.logger.warning("TA library not available. Skipping volume indicator calculations.")
-            return df_volume
-
-        # Shift input data for temporal safety
-        df_shifted = df[['high', 'low', 'close', 'volume']].shift(1)
-        shifted_high = df_shifted['high']
-        shifted_low = df_shifted['low']
-        shifted_close = df_shifted['close']
-        shifted_volume = df_shifted['volume']
-
-        df_volume['obv'] = TechnicalIndicatorCalculator.calculate_obv(shifted_close, shifted_volume)
+        # --- Volume Indicators ---
+        df_core_indicators['obv'] = TechnicalIndicatorCalculator.calculate_obv(shifted_close, shifted_volume)
 
         for period in self.config.volume_periods:
-             df_volume[f'cmf_{period}'] = TechnicalIndicatorCalculator.calculate_cmf(
+             df_core_indicators[f'cmf_{period}'] = TechnicalIndicatorCalculator.calculate_cmf(
                  high_prices=shifted_high, low_prices=shifted_low, close_prices=shifted_close,
                  volume=shifted_volume, window=period
              )
-             df_volume[f'mfi_{period}'] = TechnicalIndicatorCalculator.calculate_mfi(
-                 high_prices=shifted_high, low_prices=shifted_low, close_prices=shifted_close,
-                 volume=shifted_volume, window=period
-             )
+             # MFI also falls under volume, although it's sometimes categorized as momentum
+             # It's already calculated above in momentum, so we skip it here to avoid duplication.
+             # If you wanted to include it here, ensure to not duplicate column names.
+             # df_core_indicators[f'mfi_{period}'] = TechnicalIndicatorCalculator.calculate_mfi(...)
 
         # Volume oscillator based on shifted volume for temporal safety
-        df_volume['volume_osc'] = TechnicalIndicatorCalculator.calculate_volume_oscillator(
+        df_core_indicators['volume_osc'] = TechnicalIndicatorCalculator.calculate_volume_oscillator(
             volume=df['volume'].shift(1), # Note: uses raw volume shifted by 1
             short_ema_window=self.config.volume_oscillator_short_ema,
             long_ema_window=self.config.volume_oscillator_long_ema
         )
 
         self.logger.debug("Volume indicators added.")
-        return df_volume
 
 
-    def _add_statistical_features(self, df: pd.DataFrame) -> pd.DataFrame:
-        """
-        Adds statistical features like Z-scores and Average Daily Range (ADR).
-        """
-        df_stats = pd.DataFrame(index=df.index)
-
-        if not ta_lib_available:
-            self.logger.warning("TA library not available. Skipping statistical feature calculations.")
-            return df_stats
-
-        shifted_close = df['close'].shift(1)
-
+        # --- Statistical Features ---
         for period in self.config.z_score_periods:
-            df_stats[f'z_score_{period}'] = TechnicalIndicatorCalculator.calculate_z_score(shifted_close, period)
+            df_core_indicators[f'z_score_{period}'] = TechnicalIndicatorCalculator.calculate_z_score(shifted_close, period)
 
         for period in self.config.adr_periods:
             # Resample OHLCV data to daily frequency for ADR calculation, then shift for temporal safety
@@ -288,7 +229,6 @@ class IndicatorFeatureProcessor:
                'low' in resampled_df.columns and not resampled_df['low'].empty:
                 
                 # Check if the shifted series would result in a scalar (e.g., if only one row after shift)
-                # If it's going to be a scalar, assign NaN to avoid AttributeError
                 shifted_high_series = resampled_df['high'].shift(1)
                 shifted_low_series = resampled_df['low'].shift(1)
 
@@ -296,24 +236,25 @@ class IndicatorFeatureProcessor:
                     daily_adr = TechnicalIndicatorCalculator.calculate_adr(
                         high_prices=shifted_high_series,
                         low_prices=shifted_low_series,
-                        window=period
+                        window=period,
+                        interval=interval
                     )
                     # Reindex back to original frequency, forward-filling to propagate daily ADR to intraday bars
-                    df_stats[f'adr_{period}'] = daily_adr.reindex(df.index, method='ffill')
+                    df_core_indicators[f'adr_{period}'] = daily_adr.reindex(df.index, method='ffill')
                 else:
                     self.logger.warning(f"Resampled data for ADR period {period} resulted in non-Series object after shift. Setting ADR to NaN.")
-                    df_stats[f'adr_{period}'] = np.nan
+                    df_core_indicators[f'adr_{period}'] = np.nan
             else:
                 self.logger.warning(f"No valid data after resampling for ADR period {period}. Setting ADR to NaN.")
-                df_stats[f'adr_{period}'] = np.nan
-
+                df_core_indicators[f'adr_{period}'] = np.nan
 
         self.logger.debug("Statistical features added.")
-        return df_stats
+        return df_core_indicators
 
-    def _add_derived_features(self, df: pd.DataFrame) -> pd.DataFrame:
+
+    def add_derived_features(self, df: pd.DataFrame) -> pd.DataFrame:
         """
-        Creates all secondary and tertiary features from base indicators.
+        Creates all secondary and tertiary features from base indicators and other already calculated features.
         These features might use the *current* values of primary indicators, as long as
         those primary indicators themselves were generated from *past* OHLCV data.
         """
@@ -474,39 +415,3 @@ class IndicatorFeatureProcessor:
 
         self.logger.debug("Derived features added.")
         return df_derived
-
-
-    def add_all_technical_and_derived_features(self, df: pd.DataFrame) -> pd.DataFrame:
-        """
-        Combines all technical indicator calculations and their derived features.
-
-        Args:
-            df (pd.DataFrame): Input DataFrame with OHLCV and possibly basic price transforms.
-
-        Returns:
-            pd.DataFrame: DataFrame with all technical indicators and derived features.
-        """
-        self.logger.info("Adding all technical and derived features.")
-
-        df_momentum = self._add_momentum_indicators(df)
-        df_trend = self._add_trend_indicators(df)
-        df_volatility = self._add_volatility_indicators(df)
-        df_volume = self._add_volume_indicators(df)
-        df_stats = self._add_statistical_features(df)
-
-        # Concatenate base indicators
-        df_combined_indicators = pd.concat([
-            df_momentum,
-            df_trend,
-            df_volatility,
-            df_volume,
-            df_stats
-        ], axis=1)
-
-        # Now add derived features based on these combined indicators
-        # Pass the full df including raw (OHLCV) and base indicators for derived features
-        df_derived = self._add_derived_features(pd.concat([df, df_combined_indicators], axis=1))
-
-        # Concatenate everything and return
-        return pd.concat([df_combined_indicators, df_derived], axis=1)
-

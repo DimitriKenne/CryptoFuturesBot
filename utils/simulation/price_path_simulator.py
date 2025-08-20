@@ -12,7 +12,8 @@ PROJECT_ROOT = Path(__file__).parent.parent.parent.parent
 sys.path.append(str(PROJECT_ROOT))
 
 try:
-    from config.params import AppConfig # Import AppConfig to access FLOAT_EPSILON
+    # Import AppConfig and FLOAT_EPSILON directly
+    from config.params import AppConfig, FLOAT_EPSILON 
     from arch import arch_model # For GARCH modeling
 except ImportError as e:
     logging.critical(f"Failed to import necessary modules for PricePathSimulator: {e}. Ensure 'arch' library is installed and config is accessible.", exc_info=True)
@@ -41,7 +42,7 @@ class PricePathSimulator:
         self.hist_returns = historical_data['close'].pct_change().dropna()
         self.fitted_garch_model = None
         self.mean_drift = self.hist_returns.mean() # Mean drift from historical returns
-        self.app_config = app_config # Store app_config to access FLOAT_EPSILON
+        self.app_config = app_config # Store app_config to access other config attributes
         
         # Scaling factor for GARCH model fitting. Recommended by 'arch' for numerical stability.
         self.garch_scale_factor = 1000.0 
@@ -84,7 +85,8 @@ class PricePathSimulator:
             return
         
         # Check for constant returns, which can cause issues with GARCH fitting
-        if self.hist_returns.std() < self.app_config.FLOAT_EPSILON:
+        # Access FLOAT_EPSILON directly as a global constant
+        if self.hist_returns.std() < FLOAT_EPSILON: 
             logger.warning("Historical returns have zero variance. GARCH model cannot be fitted. Simulating with constant returns.")
             self.fitted_garch_model = None # Indicate no GARCH model was fitted
             return
@@ -257,3 +259,4 @@ class PricePathSimulator:
             synthetic_df['volume'] = np.mean(self.hist_data['volume'].dropna()) if not self.hist_data['volume'].dropna().empty else 1000 # Fallback volume
 
         return synthetic_df[['open', 'high', 'low', 'close', 'volume']]
+

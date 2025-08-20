@@ -22,15 +22,14 @@ from config.params import app_config
 from utils.strategy_execution.backtester import Backtester
 from utils.analysis.performance_analyzer import PerformanceAnalyzer # Import PerformanceAnalyzer
 
+# Import the logging setup function
+from utils.logger_config import setup_rotating_logging
+
 # --- Logging Setup ---
 # Setup for basic console logging. For more advanced logging,
 # integrate a dedicated logging utility.
-logging.basicConfig(
-    level=logging.INFO, # Default logging level
-    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
-    datefmt='%Y-%m-%d %H:%M:%S'
-)
-logger = logging.getLogger(__name__)
+setup_rotating_logging("backtest") # Pass "backtest" as the positional argument
+logger = logging.getLogger(__name__) # Re-get logger to use the configured handlers
 
 
 def main():
@@ -64,25 +63,17 @@ def main():
             backtest_mode=args.backtest_mode,
             train_ratio=args.train_ratio
         )
-        # Run backtest and capture the results (now only returns data and metrics)
-        final_trade_history, final_equity_curve, summary_metrics = backtester.run_backtest()
+        # Run backtest and capture the results (returns PerformanceAnalyzer now)
+        final_trade_history, final_equity_curve, performance_analyzer = backtester.run_backtest()
 
-        # Now, use PerformanceAnalyzer to save and plot these results ONLY for the deterministic run
+        # We can save the results (trade history and equity curve)
+        backtester.save_results()
+
+        # Only run full analysis (metrics + plots) for deterministic backtest
         logger.info("Running Performance Analysis for the deterministic backtest...")
-        performance_analyzer = PerformanceAnalyzer(
-            symbol=args.symbol,
-            interval=args.interval,
-            model_type=args.model,
-            initial_capital=app_config.trading.risk.initial_capital,
-            trade_history_data=final_trade_history,
-            equity_data=final_equity_curve,
-            results_type='backtest', # Specify this is for a backtest
-            app_config=app_config # Pass app_config to PerformanceAnalyzer
-        )
         performance_analyzer.run_full_analysis() # This will calculate, save, and plot
 
     except SystemExit:
-        # Catch SystemExit to prevent traceback on intentional sys.exit() calls from modules
         logger.info("Backtest script finished as requested.")
     except Exception as e:
         logger.critical(f"Unhandled exception during backtest execution: {e}", exc_info=True)
