@@ -1,4 +1,4 @@
-# config/exchange_config_schema.py
+# config/exchange.py
 
 from dataclasses import dataclass, field
 from typing import Dict, Any, Literal

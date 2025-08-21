@@ -12,7 +12,7 @@ logger = logging.getLogger(__name__)
 
 # Import paths configuration
 try:
-    from config.paths import PATHS
+    from config.paths import PATHS, PATH_CONFIG
 except ImportError:
     # Define a basic fallback if paths.py is missing
     logger.error("config.paths not found. Using basic fallback paths. Data loading/saving may fail.")
@@ -71,7 +71,7 @@ class DataManager:
     Uses configuration from config/paths.py.
     Supports saving/loading DataFrames (to parquet) and model artifacts (using joblib).
     """
-
+    
     # Mapping of data_type keys to directory path keys in PATHS for load_data/save_data
     _DIRECTORY_KEY_MAP = {
         'raw': 'raw_data_dir',
@@ -121,9 +121,86 @@ class DataManager:
     def __init__(self):
         """Initializes DataManager."""
         self.logger = logging.getLogger(f"{__name__}.{self.__class__.__name__}")
-        self.paths = PATHS # Use the centralized PATHS dictionary
+        self.paths = PATHS
+        self.path_config = PATH_CONFIG
 
+# ==============================================================================
+    # --- NEW, PREFERRED METHODS (Safe and Isolated) ---
+    # ==============================================================================
 
+    def get_path(self, data_type: str, **kwargs) -> Path:
+        """
+        Constructs a file path for any data type defined in PATH_CONFIG.
+        This is the new, centralized method for all path generation.
+
+        Args:
+            data_type (str): The key for the data type (e.g., 'raw', 'processed').
+            **kwargs: Placeholders for the path pattern (e.g., symbol, interval).
+
+        Returns:
+            Path: The fully constructed file path.
+        """
+        try:
+            directory = self.path_config['directories'][data_type]
+            pattern = self.path_config['patterns'][data_type]
+        except KeyError:
+            self.logger.error(f"Path configuration for data_type '{data_type}' not found in PATH_CONFIG.")
+            raise ValueError(f"Path configuration for data_type '{data_type}' not found in PATH_CONFIG.")
+
+        # Sanitize keyword arguments for use in filenames
+        safe_kwargs = {k: str(v).replace('/', '_').upper() for k, v in kwargs.items()}
+        
+        filename = pattern.format(**safe_kwargs)
+        return Path(directory) / filename
+
+    def save_dataframe(self, df: pd.DataFrame, data_type: str, **kwargs):
+        """
+        Saves a DataFrame using the new, config-driven path generation.
+
+        Args:
+            df (pd.DataFrame): The DataFrame to save.
+            data_type (str): The key for the data type (e.g., 'raw').
+            **kwargs: Placeholders for the path pattern (e.g., symbol, interval).
+        """
+        if not isinstance(df, (pd.DataFrame, pd.Series)):
+             raise TypeError("Input must be a pandas DataFrame or Series.")
+        
+        file_path = self.get_path(data_type, **kwargs)
+        self.logger.info(f"Saving '{data_type}' dataframe to: {file_path}")
+        
+        try:
+            file_path.parent.mkdir(parents=True, exist_ok=True)
+            df.to_parquet(file_path, index=True)
+            self.logger.info(f"Successfully saved dataframe to {file_path}.")
+        except Exception as e:
+            self.logger.error(f"Failed to save dataframe to {file_path}: {e}", exc_info=True)
+            raise
+
+    def load_dataframe(self, data_type: str, **kwargs) -> Optional[pd.DataFrame]:
+        """
+        Loads a DataFrame using the new, config-driven path generation.
+
+        Args:
+            data_type (str): The key for the data type (e.g., 'raw').
+            **kwargs: Placeholders for the path pattern (e.g., symbol, interval).
+        """
+        file_path = self.get_path(data_type, **kwargs)
+        
+        if not file_path.exists():
+            self.logger.warning(f"Dataframe file not found: {file_path}")
+            return None
+        
+        self.logger.info(f"Loading '{data_type}' dataframe from: {file_path}")
+        try:
+            return pd.read_parquet(file_path)
+        except Exception as e:
+            self.logger.error(f"Failed to load dataframe from {file_path}: {e}", exc_info=True)
+            raise
+
+    # ==============================================================================
+    # --- ORIGINAL METHODS (Unchanged for Backward Compatibility) ---
+    # ==============================================================================
+    
     def get_file_path(self, symbol: str, interval: str, data_type: str, name_suffix: str = '', model_key: Optional[str] = None) -> Path:
         """
         Constructs a standardized file path for data or model artifacts.

@@ -60,7 +60,7 @@ BACKTESTING_ANALYSIS_DIR.mkdir(parents=True, exist_ok=True)
 LIVE_TRADING_ANALYSIS_DIR.mkdir(parents=True, exist_ok=True)
 
 # --- File Naming Patterns ---
-RAW_DATA_PATTERN = "{symbol}_{interval}_raw.csv"
+RAW_DATA_PATTERN = "{symbol}_{interval}_raw.parquet"
 PROCESSED_DATA_PATTERN = "{symbol}_{interval}_processed.parquet"
 LABELED_DATA_PATTERN = "{symbol}_{interval}_labeled.parquet" # Pattern for labeled data files
 
@@ -91,6 +91,29 @@ ANALYSIS_PLOT_PATTERN = "{symbol}_{interval}_{model_type}_{analysis_type}.png" #
 ANALYSIS_TABLE_PATTERN = "{symbol}_{interval}_{model_type}_{analysis_type}.csv" # Generic table pattern for model/backtest analysis
 
 
+
+# ==============================================================================
+# --- NEW: Centralized Path Configuration Object (The "Blueprint") ---
+# This is the new, preferred way for DataManager to get path info.
+# We will populate this incrementally as we refactor each part of the project.
+# ==============================================================================
+PATH_CONFIG = {
+    'directories': {
+        # STEP 1: Add the configuration for 'raw' data.
+        'raw': RAW_DATA_DIR,
+    },
+    'patterns': {
+        # STEP 1: Add the pattern for 'raw' data.
+        'raw': RAW_DATA_PATTERN,
+    }
+}
+
+
+# ==============================================================================
+# --- ORIGINAL: Consolidated Dictionary (For Backward Compatibility) ---
+# This dictionary remains UNCHANGED to ensure that other parts of the project
+# that have not yet been refactored continue to work without any issues.
+# ==============================================================================
 # Consolidated dictionary of all paths for easy access
 PATHS = {
     "project_root": PROJECT_ROOT,

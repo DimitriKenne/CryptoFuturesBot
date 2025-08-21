@@ -288,5 +288,13 @@ def validate_config(config):
         validate_model_config(config)
     elif name == "LabelConfig":
         validate_label_config(config)
+    elif name == "AppConfig":
+        validate_general_config(config.general)
+        validate_feature_config(config.feature)
+        validate_trading_config(config.trading)
+        validate_exchange_config(config.exchange)
+        validate_notifier_config(config.notifier)
+        validate_model_config(config.model)
+        validate_label_config(config.labeling)
     # Add more elifs for other config types as needed
 
