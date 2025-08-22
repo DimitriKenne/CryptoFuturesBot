@@ -99,14 +99,15 @@ ANALYSIS_TABLE_PATTERN = "{symbol}_{interval}_{model_type}_{analysis_type}.csv" 
 # ==============================================================================
 PATH_CONFIG = {
     'directories': {
-        # STEP 1: Add the configuration for 'raw' data.
         'raw': RAW_DATA_DIR,
+        'processed': PROCESSED_DATA_DIR,  # <-- ADDED for Phase 2
     },
     'patterns': {
-        # STEP 1: Add the pattern for 'raw' data.
         'raw': RAW_DATA_PATTERN,
+        'processed': PROCESSED_DATA_PATTERN, # <-- ADDED for Phase 2
     }
 }
+
 
 
 # ==============================================================================

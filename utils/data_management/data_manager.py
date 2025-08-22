@@ -127,62 +127,38 @@ class DataManager:
 # ==============================================================================
     # --- NEW, PREFERRED METHODS (Safe and Isolated) ---
     # ==============================================================================
-
+    
     def get_path(self, data_type: str, **kwargs) -> Path:
-        """
-        Constructs a file path for any data type defined in PATH_CONFIG.
-        This is the new, centralized method for all path generation.
-
-        Args:
-            data_type (str): The key for the data type (e.g., 'raw', 'processed').
-            **kwargs: Placeholders for the path pattern (e.g., symbol, interval).
-
-        Returns:
-            Path: The fully constructed file path.
-        """
+        """Constructs a file path for any data type defined in PATH_CONFIG."""
         try:
             directory = self.path_config['directories'][data_type]
             pattern = self.path_config['patterns'][data_type]
         except KeyError:
-            self.logger.error(f"Path configuration for data_type '{data_type}' not found in PATH_CONFIG.")
-            raise ValueError(f"Path configuration for data_type '{data_type}' not found in PATH_CONFIG.")
+            raise ValueError(f"Path configuration for data_type '{data_type}' not found.")
 
-        # Sanitize keyword arguments for use in filenames
         safe_kwargs = {k: str(v).replace('/', '_').upper() for k, v in kwargs.items()}
-        
         filename = pattern.format(**safe_kwargs)
         return Path(directory) / filename
 
     def save_dataframe(self, df: pd.DataFrame, data_type: str, **kwargs):
-        """
-        Saves a DataFrame using the new, config-driven path generation.
-
-        Args:
-            df (pd.DataFrame): The DataFrame to save.
-            data_type (str): The key for the data type (e.g., 'raw').
-            **kwargs: Placeholders for the path pattern (e.g., symbol, interval).
-        """
+        """Saves a DataFrame using the new, config-driven path generation."""
         if not isinstance(df, (pd.DataFrame, pd.Series)):
              raise TypeError("Input must be a pandas DataFrame or Series.")
         
         file_path = self.get_path(data_type, **kwargs)
         self.logger.info(f"Saving '{data_type}' dataframe to: {file_path}")
         
-        try:
-            file_path.parent.mkdir(parents=True, exist_ok=True)
-            df.to_parquet(file_path, index=True)
-            self.logger.info(f"Successfully saved dataframe to {file_path}.")
-        except Exception as e:
-            self.logger.error(f"Failed to save dataframe to {file_path}: {e}", exc_info=True)
-            raise
+        file_path.parent.mkdir(parents=True, exist_ok=True)
+        df.to_parquet(file_path, index=True)
+        self.logger.info(f"Successfully saved dataframe to {file_path}.")
 
     def load_dataframe(self, data_type: str, **kwargs) -> Optional[pd.DataFrame]:
         """
         Loads a DataFrame using the new, config-driven path generation.
-
-        Args:
-            data_type (str): The key for the data type (e.g., 'raw').
-            **kwargs: Placeholders for the path pattern (e.g., symbol, interval).
+        
+        --- CORRECTED ---
+        This method now includes logic to correctly set the DatetimeIndex,
+        mirroring the robust behavior of the original `load_data` method.
         """
         file_path = self.get_path(data_type, **kwargs)
         
@@ -192,9 +168,22 @@ class DataManager:
         
         self.logger.info(f"Loading '{data_type}' dataframe from: {file_path}")
         try:
-            return pd.read_parquet(file_path)
+            df = pd.read_parquet(file_path)
+
+            # --- ADDED: Index Handling Logic ---
+            if data_type == 'raw' and 'open_time' in df.columns:
+                self.logger.debug("Raw data detected. Setting index from 'open_time' column.")
+                df['open_time'] = pd.to_datetime(df['open_time'], utc=True)
+                df = df.set_index('open_time')
+                df.index.name = 'timestamp'
+            elif not isinstance(df.index, pd.DatetimeIndex):
+                 self.logger.warning(f"Loaded data for '{data_type}' does not have a DatetimeIndex. This may cause issues downstream.")
+            elif df.index.name != 'timestamp':
+                df.index.name = 'timestamp' # Ensure consistent index naming
+            
+            return df
         except Exception as e:
-            self.logger.error(f"Failed to load dataframe from {file_path}: {e}", exc_info=True)
+            self.logger.error(f"Failed to load or process dataframe from {file_path}: {e}", exc_info=True)
             raise
 
     # ==============================================================================

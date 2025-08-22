@@ -3,10 +3,8 @@
 generate_features.py
 
 Loads raw OHLCV data using DataManager, engineers features using the FeatureEngineer,
-and saves the resulting DataFrame using DataManager.
-
-Uses the updated configuration structure from config/params.py and config/feature_config_schema.py.
-Configures logging using utils/logger_config.py.
+and saves the resulting DataFrame using DataManager. This script has been updated
+to use the new config-driven methods in DataManager.
 """
 
 import argparse
@@ -26,35 +24,22 @@ sys.path.insert(0, str(PROJECT_ROOT))
 
 # Import configuration and utilities
 try:
-    # Import the central app_config object and FLOAT_EPSILON
-    from config.params import app_config, FLOAT_EPSILON
-    # Import the DataManager
+    from config.params import app_config
+    from config.validator import validate_config  # <-- ADDED for robustness
     from utils.data_management.data_manager import DataManager
-    # Import FeatureEngineer from its location
     from utils.feature_engineering.feature_engineer import FeatureEngineer
-    # Import TemporalSafetyError
     from utils.exceptions import TemporalSafetyError
-    # Import setup_rotating_logging
     from utils.logger_config import setup_rotating_logging
 except ImportError as e:
-    print(f"CRITICAL ERROR: Failed to import necessary modules: {e}. "
-          f"Ensure your project structure and dependencies are correct.", file=sys.stderr)
-    sys.exit(1)
-except Exception as e:
-    print(f"An unexpected error occurred during initial imports or configuration loading: {e}", file=sys.stderr)
+    print(f"CRITICAL ERROR: Failed to import necessary modules: {e}.", file=sys.stderr)
     sys.exit(1)
 
 # --- Set up Logging ---
 try:
     setup_rotating_logging('generate_features')
     logger = logging.getLogger(__name__)
-    logger.info("Rotating logging configured successfully.")
 except Exception as e:
-    logging.basicConfig(
-        level=logging.INFO,
-        format='%(asctime)s - %(name)s - %(levelname)s - %(message)s - [%(lineno)d]',
-        handlers=[logging.StreamHandler(sys.stdout)]
-    )
+    logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
     logger = logging.getLogger(__name__)
     logger.warning(f"Failed to configure rotating logging: {e}. Using basic stdout logging.", exc_info=True)
 
@@ -68,51 +53,39 @@ def generate_features_pipeline(symbol: str, interval: str):
     """
     logger.info(f"Starting feature generation pipeline for {symbol} {interval}...")
 
-    # --- 1. Load Feature Engineering Configuration from app_config ---
-    # Use the features section from the central app_config
+    # --- 1. Load and Validate Feature Configuration ---
     feature_config = copy.deepcopy(app_config.features)
-    # Corrected: Access sequence_length_bars and temporal_validation directly from feature_config
-    # These attributes are part of FeatureConfig itself, not TradingConfig.
-    # We no longer need a separate 'strategy_config' here for overrides.
-    general_config = copy.deepcopy(app_config.general)
-
-
-    logger.info(f"Final feature engineering configuration: {feature_config}")
-    logger.info(f"Using general configuration: {general_config}")
-
+    logger.info("Validating feature configuration...")
+    try:
+        validate_config(feature_config)
+        logger.info("Feature configuration is valid.")
+    except Exception as e:
+        logger.critical(f"Feature configuration is invalid: {e}", exc_info=True)
+        sys.exit(1)
 
     # --- 2. Initialize DataManager and FeatureEngineer ---
     dm = DataManager()
-    try:
-        fe = FeatureEngineer(config=feature_config)
-    except Exception as e:
-        logger.error(f"An unexpected error occurred initializing FeatureEngineer: {e}", exc_info=True)
-        sys.exit(1)
+    fe = FeatureEngineer(config=feature_config)
 
-    # --- 3. Load Raw Data ---
+    # --- 3. Load Raw Data using the new DataManager method ---
     logger.info(f"Attempting to load raw data for {symbol} {interval}...")
     try:
-        df_raw = dm.load_data(
+        # UPDATED: Use the new, config-driven load_dataframe method
+        df_raw = dm.load_dataframe(
+            data_type='raw',
             symbol=symbol,
-            interval=interval,
-            data_type='raw'
+            interval=interval
         )
-        logger.info(f"Successfully loaded raw data for {symbol} {interval}. Shape: {df_raw.shape}")
-    except FileNotFoundError:
-        logger.critical(f"Raw data file not found for {symbol} {interval}. "
-                        f"Please run 'python -m scripts.fetch_data --symbol {symbol} --interval {interval}' first.")
-        sys.exit(1)
+        if df_raw is None or df_raw.empty:
+            logger.critical(f"Raw data file not found or is empty for {symbol} {interval}. "
+                            f"Please run 'python scripts/fetch_data.py --symbol {symbol} --interval {interval}' first.")
+            sys.exit(1)
+        
+        logger.info(f"Successfully loaded raw data. Shape: {df_raw.shape}")
+
     except Exception as e:
         logger.critical(f"Error loading raw data for {symbol} {interval}: {e}", exc_info=True)
         sys.exit(1)
-
-    if df_raw.empty:
-        logger.critical(f"Loaded raw data for {symbol} {interval} is empty. Cannot generate features.")
-        sys.exit(1)
-    if not isinstance(df_raw.index, pd.DatetimeIndex):
-        logger.critical("Loaded DataFrame does not have a DatetimeIndex. Please ensure your data fetching pipeline sets the index correctly.")
-        sys.exit(1)
-    logger.info("Raw data basic validation passed.")
 
     # --- 4. Generate Features ---
     try:
@@ -121,42 +94,35 @@ def generate_features_pipeline(symbol: str, interval: str):
         logger.info(f"Successfully generated features. Final DataFrame shape: {df_features.shape}")
     except TemporalSafetyError as e:
         logger.critical(f"Temporal safety error during feature generation: {e}", exc_info=True)
-        logger.critical(f"Violating features: {e.features}. Please review feature engineering logic.")
         sys.exit(1)
     except Exception as e:
         logger.critical(f"An unexpected error occurred during feature generation: {e}", exc_info=True)
         sys.exit(1)
 
-    # --- 5. Save Processed Data ---
+    # --- 5. Save Processed Data using the new DataManager method ---
     logger.info(f"Attempting to save processed (featured) data for {symbol} {interval}...")
     try:
-        dm.save_data(
-            df_to_save=df_features,
+        # UPDATED: Use the new, config-driven save_dataframe method.
+        # This method handles its own logging, making this call cleaner.
+        dm.save_dataframe(
+            df=df_features,
+            data_type='processed',
             symbol=symbol,
             interval=interval,
-            data_type='processed',
         )
-        logger.info(f"Successfully saved processed data to {dm.get_file_path(symbol, interval, 'processed')}")
     except Exception as e:
         logger.critical(f"Error saving processed data: {e}", exc_info=True)
         sys.exit(1)
 
-    logger.info(f"Feature generation pipeline for {symbol} {interval} completed.")
+    logger.info(f"Feature generation pipeline for {symbol} {interval} completed successfully.")
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(
         description='Generate technical and statistical features from OHLCV data.'
     )
+    parser.add_argument('--symbol', type=str, required=True, help='Trading pair symbol (e.g., BTCUSDT)')
     parser.add_argument(
-        '--symbol',
-        type=str,
-        required=True,
-        help='Trading pair symbol (e.g., BTCUSDT)'
-    )
-    parser.add_argument(
-        '--interval',
-        type=str,
-        required=True,
+        '--interval', type=str, required=True,
         choices=['1m', '5m', '15m', '30m', '1h', '2h', '4h', '6h', '8h', '12h', '1d', '3d', '1w', '1M'],
         help='Time interval for candles (e.g., 5m, 1h, 1d)'
     )
@@ -164,22 +130,9 @@ if __name__ == "__main__":
     args = parser.parse_args()
 
     try:
-        generate_features_pipeline(
-            symbol=args.symbol,
-            interval=args.interval,
-        )
+        generate_features_pipeline(symbol=args.symbol, interval=args.interval)
     except SystemExit:
-        pass
+        pass # Allow clean exit
     except Exception: 
         logger.error("Feature generation script terminated due to an unhandled error.", exc_info=True) 
         sys.exit(1)
-
-    """
-    Usage example:
-
-    Generate features for BTCUSDT 1-hour data:
-        python scripts/generate_features.py --symbol BTCUSDT --interval 1h
-
-    Generate features for ADAUSDT 5-minute data:
-        python -m scripts.generate_features --symbol ADAUSDT --interval 5m
-    """
