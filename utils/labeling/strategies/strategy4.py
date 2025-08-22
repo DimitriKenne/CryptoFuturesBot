@@ -3,10 +3,13 @@
 import pandas as pd
 import numpy as np
 import logging
-from typing import Any, List, Optional
+from typing import Any, List, Optional, Tuple
 from sklearn.preprocessing import StandardScaler
 from sklearn.decomposition import PCA
 from sklearn.cluster import KMeans
+
+from utils.labeling.analysis_calculator import AnalysisCalculator
+from utils.labeling.analysis_plotter import AnalysisPlotter
 
 from .base_strategy import BaseLabelingStrategy, logger, FLOAT_EPSILON
 
@@ -182,3 +185,32 @@ class Strategy4(BaseLabelingStrategy):
         self.logger.debug("Raw labels calculated for Labeling Strategy 4 (Clustering-Based Labeling) and aligned to original index.")
         
         return final_labels
+
+      # *** NEW METHOD TO SATISFY THE ABSTRACT BASE CLASS CONTRACT ***
+    def perform_strategy_specific_analysis(
+        self, 
+        df_original_input: pd.DataFrame, 
+        plotter: 'AnalysisPlotter', 
+        calculator: 'AnalysisCalculator'
+    ) -> List[Tuple[str, Any]]:
+        """
+        Performs analysis specific to the Triple Barrier strategy.
+        
+        For Strategy 1, there is currently no specific analysis beyond the common
+        analyses performed by the LabelAnalyzer. This method serves as a placeholder
+        to fulfill the abstract base class contract.
+
+        Args:
+            df_original_input (pd.DataFrame): The original, unmodified DataFrame.
+            plotter (AnalysisPlotter): Instance for creating plots.
+            calculator (AnalysisCalculator): Instance for performing calculations.
+
+        Returns:
+            List[Tuple[str, Any]]: An empty list, as no artifacts are generated.
+        """
+        self.logger.info("Performing strategy-specific analysis for Strategy 1...")
+        self.logger.info("No specific analysis defined for Strategy 1. Returning no artifacts.")
+        
+        # This strategy does not generate any specific analysis artifacts.
+        # It returns an empty list to conform to the base class method signature.
+        return []

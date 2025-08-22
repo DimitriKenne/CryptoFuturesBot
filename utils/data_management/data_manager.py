@@ -6,6 +6,7 @@ import os
 import joblib # Joblib is often used for saving/loading models and potentially metadata
 import sys # Import sys for checking modules
 from typing import Optional, Any, Dict, Union # Import Dict and Union
+from matplotlib.figure import Figure
 
 # Set up logging for the data manager
 logger = logging.getLogger(__name__)
@@ -16,28 +17,6 @@ try:
 except ImportError:
     # Define a basic fallback if paths.py is missing
     logger.error("config.paths not found. Using basic fallback paths. Data loading/saving may fail.")
-    PROJECT_ROOT = Path(__file__).parent.parent
-    PATHS = {
-        'raw_data_dir': PROJECT_ROOT / "data" / "raw",
-        'processed_data_dir': PROJECT_ROOT / "data" / "processed",
-        'labeled_data_dir': PROJECT_ROOT / "data" / "labeled",
-        'trained_models_dir': PROJECT_ROOT / "models" / "trained_models",
-        'backtesting_results_dir': PROJECT_ROOT / "results" / "backtesting",
-        'live_trading_results_dir': PROJECT_ROOT / "results" / "live_trading",
-        'logs_dir': PROJECT_ROOT / "logs",
-        'analysis_dir': PROJECT_ROOT / "results" / "analysis",
-        'labeling_analysis_dir': PROJECT_ROOT / "results" / "analysis" / "labeling",
-        'model_analysis_dir': PROJECT_ROOT / "results" / "analysis" / "model_analysis", # Added model_analysis_dir
-        'backtesting_analysis_dir': PROJECT_ROOT / "results" / "analysis" / "backtesting", # Added backtesting_analysis_dir
-        'live_trading_analysis_dir': PROJECT_ROOT / "results" / "analysis" / "live_trading", # Added live_trading_analysis_dir
-    }
-    # Ensure fallback directories exist (basic attempt)
-    for key, path in PATHS.items():
-        if isinstance(path, Path):
-            try:
-                path.mkdir(parents=True, exist_ok=True)
-            except OSError as e:
-                logger.warning(f"Fallback: Could not create directory {path}: {e}")
 
 
 # --- Conditional Import for TensorFlow and Keras ---
@@ -121,70 +100,115 @@ class DataManager:
     def __init__(self):
         """Initializes DataManager."""
         self.logger = logging.getLogger(f"{__name__}.{self.__class__.__name__}")
+        # These are kept as-is for backward compatibility with older scripts
         self.paths = PATHS
+        # This is the new, preferred configuration object for refactored scripts
         self.path_config = PATH_CONFIG
+        self._ensure_base_dirs()
 
-# ==============================================================================
-    # --- NEW, PREFERRED METHODS (Safe and Isolated) ---
+    def _ensure_base_dirs(self):
+        """Ensures that the fundamental directories defined in PATH_CONFIG exist."""
+        for directory in self.path_config.get('directories', {}).values():
+            try:
+                Path(directory).mkdir(parents=True, exist_ok=True)
+            except Exception as e:
+                self.logger.error(f"Could not create base directory at {directory}: {e}", exc_info=True)
+
     # ==============================================================================
-    
+    # --- NEW, PREFERRED METHODS (For Labeling Refactor and Future Use) ---
+    # ==============================================================================
+
     def get_path(self, data_type: str, **kwargs) -> Path:
         """Constructs a file path for any data type defined in PATH_CONFIG."""
         try:
             directory = self.path_config['directories'][data_type]
             pattern = self.path_config['patterns'][data_type]
         except KeyError:
-            raise ValueError(f"Path configuration for data_type '{data_type}' not found.")
+            raise ValueError(f"Path configuration for data_type '{data_type}' not found in PATH_CONFIG.")
 
-        safe_kwargs = {k: str(v).replace('/', '_').upper() for k, v in kwargs.items()}
+        safe_kwargs = {k: str(v).replace('/', '_') for k, v in kwargs.items()}
         filename = pattern.format(**safe_kwargs)
         return Path(directory) / filename
 
+    # *** MODIFIED: This method now requires symbol and interval ***
+    def get_analysis_dir(self, labeling_strategy: str, symbol: str, interval: str) -> Path:
+        """
+        Creates and returns the Path for a strategy-specific analysis sub-directory
+        that now includes the symbol and interval in its name.
+        """
+        try:
+            dir_pattern_str = str(self.path_config['patterns']['labeling_strategy_dir'])
+            
+            # Sanitize inputs for directory naming
+            safe_symbol = symbol.replace('/', '_').upper()
+            safe_interval = interval.replace(':', '_')
+            
+            analysis_dir = Path(dir_pattern_str.format(
+                labeling_strategy=labeling_strategy,
+                symbol=safe_symbol,
+                interval=safe_interval
+            ))
+            
+            analysis_dir.mkdir(parents=True, exist_ok=True)
+            self.logger.debug(f"Ensured analysis directory exists: {analysis_dir}")
+            return analysis_dir
+        except KeyError:
+            raise ValueError("Path pattern for 'labeling_strategy_dir' not found in PATH_CONFIG.")
+        except Exception as e:
+            self.logger.error(f"Failed to create analysis directory for strategy '{labeling_strategy}': {e}", exc_info=True)
+            raise
+
     def save_dataframe(self, df: pd.DataFrame, data_type: str, **kwargs):
-        """Saves a DataFrame using the new, config-driven path generation."""
-        if not isinstance(df, (pd.DataFrame, pd.Series)):
-             raise TypeError("Input must be a pandas DataFrame or Series.")
-        
+        """Saves a DataFrame (e.g., raw, processed, labeled) to a parquet file."""
         file_path = self.get_path(data_type, **kwargs)
         self.logger.info(f"Saving '{data_type}' dataframe to: {file_path}")
-        
         file_path.parent.mkdir(parents=True, exist_ok=True)
         df.to_parquet(file_path, index=True)
-        self.logger.info(f"Successfully saved dataframe to {file_path}.")
 
     def load_dataframe(self, data_type: str, **kwargs) -> Optional[pd.DataFrame]:
-        """
-        Loads a DataFrame using the new, config-driven path generation.
-        
-        --- CORRECTED ---
-        This method now includes logic to correctly set the DatetimeIndex,
-        mirroring the robust behavior of the original `load_data` method.
-        """
+        """Loads a DataFrame (e.g., raw, processed, labeled) from a parquet file."""
         file_path = self.get_path(data_type, **kwargs)
-        
         if not file_path.exists():
             self.logger.warning(f"Dataframe file not found: {file_path}")
             return None
-        
         self.logger.info(f"Loading '{data_type}' dataframe from: {file_path}")
-        try:
-            df = pd.read_parquet(file_path)
+        return pd.read_parquet(file_path)
 
-            # --- ADDED: Index Handling Logic ---
-            if data_type == 'raw' and 'open_time' in df.columns:
-                self.logger.debug("Raw data detected. Setting index from 'open_time' column.")
-                df['open_time'] = pd.to_datetime(df['open_time'], utc=True)
-                df = df.set_index('open_time')
-                df.index.name = 'timestamp'
-            elif not isinstance(df.index, pd.DatetimeIndex):
-                 self.logger.warning(f"Loaded data for '{data_type}' does not have a DatetimeIndex. This may cause issues downstream.")
-            elif df.index.name != 'timestamp':
-                df.index.name = 'timestamp' # Ensure consistent index naming
+    # *** MODIFIED: Now passes symbol and interval to get_analysis_dir ***
+    def save_analysis_table(self, df: pd.DataFrame, analysis_type: str, labeling_strategy: str, **kwargs):
+        """Saves an analysis table (DataFrame) to a CSV in the correct strategy subfolder."""
+        symbol = kwargs.get('symbol')
+        interval = kwargs.get('interval')
+        if not symbol or not interval:
+            raise ValueError("save_analysis_table requires 'symbol' and 'interval' in kwargs.")
             
-            return df
-        except Exception as e:
-            self.logger.error(f"Failed to load or process dataframe from {file_path}: {e}", exc_info=True)
-            raise
+        analysis_dir = self.get_analysis_dir(labeling_strategy, symbol, interval)
+        pattern = str(self.path_config['patterns']['labeling_analysis_table'])
+        
+        safe_kwargs = {k: str(v).replace('/', '_') for k, v in kwargs.items()}
+        filename = pattern.format(analysis_type=analysis_type, **safe_kwargs)
+        file_path = analysis_dir / filename
+        
+        self.logger.info(f"Saving analysis table '{analysis_type}' to: {file_path}")
+        df.to_csv(file_path, index=True)
+
+    # *** MODIFIED: Now passes symbol and interval to get_analysis_dir ***
+    def save_analysis_plot(self, fig: Figure, analysis_type: str, labeling_strategy: str, **kwargs):
+        """Saves an analysis plot (Figure) to a PNG in the correct strategy subfolder."""
+        symbol = kwargs.get('symbol')
+        interval = kwargs.get('interval')
+        if not symbol or not interval:
+            raise ValueError("save_analysis_plot requires 'symbol' and 'interval' in kwargs.")
+
+        analysis_dir = self.get_analysis_dir(labeling_strategy, symbol, interval)
+        pattern = str(self.path_config['patterns']['labeling_analysis_plot'])
+
+        safe_kwargs = {k: str(v).replace('/', '_') for k, v in kwargs.items()}
+        filename = pattern.format(analysis_type=analysis_type, **safe_kwargs)
+        file_path = analysis_dir / filename
+        
+        self.logger.info(f"Saving analysis plot '{analysis_type}' to: {file_path}")
+        fig.savefig(file_path, dpi=150, bbox_inches='tight')
 
     # ==============================================================================
     # --- ORIGINAL METHODS (Unchanged for Backward Compatibility) ---

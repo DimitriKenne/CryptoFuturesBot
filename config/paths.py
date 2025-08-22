@@ -19,55 +19,43 @@ RESULTS_DIR = PROJECT_ROOT / "results"
 LOGS_DIR = PROJECT_ROOT / "logs"
 DOCS_DIR = PROJECT_ROOT / "docs"
 
-# Ensure all base directories exist
-DATA_DIR.mkdir(parents=True, exist_ok=True)
-MODELS_DIR.mkdir(parents=True, exist_ok=True)
-RESULTS_DIR.mkdir(parents=True, exist_ok=True)
-LOGS_DIR.mkdir(parents=True, exist_ok=True)
-DOCS_DIR.mkdir(parents=True, exist_ok=True)
-
 # --- Data Subdirectories ---
 RAW_DATA_DIR = DATA_DIR / "raw"
 PROCESSED_DATA_DIR = DATA_DIR / "processed"
 LABELED_DATA_DIR = DATA_DIR / "labeled"
 
-RAW_DATA_DIR.mkdir(parents=True, exist_ok=True)
-PROCESSED_DATA_DIR.mkdir(parents=True, exist_ok=True)
-LABELED_DATA_DIR.mkdir(parents=True, exist_ok=True)
-
-# --- Model Subdirectories ---
-TRAINED_MODELS_DIR = MODELS_DIR / "trained_models"
-TRAINED_MODELS_DIR.mkdir(parents=True, exist_ok=True)
-
 # --- Results Subdirectories ---
+ANALYSIS_RESULTS_DIR = RESULTS_DIR / "analysis" 
 BACKTESTING_RESULTS_DIR = RESULTS_DIR / "backtesting"
 LIVE_TRADING_RESULTS_DIR = RESULTS_DIR / "live_trading"
-ANALYSIS_RESULTS_DIR = RESULTS_DIR / "analysis" # Base analysis directory
-
-BACKTESTING_RESULTS_DIR.mkdir(parents=True, exist_ok=True)
-LIVE_TRADING_RESULTS_DIR.mkdir(parents=True, exist_ok=True)
-ANALYSIS_RESULTS_DIR.mkdir(parents=True, exist_ok=True)
 
 # Analysis subdirectories
-MODEL_ANALYSIS_DIR = ANALYSIS_RESULTS_DIR / "model"
-LABELING_ANALYSIS_BASE_DIR = ANALYSIS_RESULTS_DIR / "labeling" # Base directory for all labeling analysis
+LABELING_ANALYSIS_BASE_DIR = ANALYSIS_RESULTS_DIR / "labeling"
+MODEL_ANALYSIS_DIR = ANALYSIS_RESULTS_DIR / "model" 
 BACKTESTING_ANALYSIS_DIR = ANALYSIS_RESULTS_DIR / "backtesting"
 LIVE_TRADING_ANALYSIS_DIR = ANALYSIS_RESULTS_DIR / "live_trading"
 
-MODEL_ANALYSIS_DIR.mkdir(parents=True, exist_ok=True)
-LABELING_ANALYSIS_BASE_DIR.mkdir(parents=True, exist_ok=True)
-BACKTESTING_ANALYSIS_DIR.mkdir(parents=True, exist_ok=True)
-LIVE_TRADING_ANALYSIS_DIR.mkdir(parents=True, exist_ok=True)
+# --- Model Subdirectories ---
+TRAINED_MODELS_DIR = MODELS_DIR / "trained_models"
 
+#===========================File Naming Patterns========================
 # --- File Naming Patterns ---
 RAW_DATA_PATTERN = "{symbol}_{interval}_raw.parquet"
 PROCESSED_DATA_PATTERN = "{symbol}_{interval}_processed.parquet"
 LABELED_DATA_PATTERN = "{symbol}_{interval}_labeled.parquet" # Pattern for labeled data files
 
-TRAINED_MODEL_PATTERN = "{symbol}_{interval}_{model_key}_model.keras" # For Keras models
+
+# Patterns for labeling analysis artifacts
+LABELING_STRATEGY_DIR_PATTERN = LABELING_ANALYSIS_BASE_DIR / "{labeling_strategy}_{symbol}_{interval}"
+LABELING_ANALYSIS_PLOT_PATTERN = "{symbol}_{interval}_{analysis_type}.png" 
+LABELING_ANALYSIS_TABLE_PATTERN = "{symbol}_{interval}_{analysis_type}.csv"
+
+
+# Trained Model Patterns
+TRAINED_MODEL_PATTERN = "{symbol}_{interval}_{model_key}_model.keras" 
 MODEL_METADATA_PATTERN = "{symbol}_{interval}_{model_key}_metadata.json"
 MODEL_PREPROCESSOR_PATTERN = "{symbol}_{interval}_{model_key}_preprocessor.pkl"
-MODEL_PIPELINE_PATTERN = "{symbol}_{interval}_{model_key}_pipeline.pkl" # For sklearn pipelines
+MODEL_PIPELINE_PATTERN = "{symbol}_{interval}_{model_key}_pipeline.pkl" 
 
 # Backtesting Results Patterns
 # These should now include {model_type} and use .parquet
@@ -81,11 +69,7 @@ LIVE_TRADING_TRADES_PATTERN = "{symbol}_{interval}_{model_type}_trades.parquet"
 LIVE_TRADING_EQUITY_PATTERN = "{symbol}_{interval}_{model_type}_equity.parquet"
 LIVE_TRADING_METRICS_PATTERN = "{symbol}_{interval}_{model_type}_metrics.json"
 LIVE_TRADING_CAPITAL_STATE_PATTERN = "{symbol}_{interval}_{model_type}_capital_state.json" # For bot state
-
-# Analysis Output Patterns (within analysis subdirectories)
-LABELING_STRATEGY_ANALYSIS_DIR_PATTERN_STR = str(LABELING_ANALYSIS_BASE_DIR / "{labeling_strategy}") # New pattern for strategy-specific subfolders
-LABELING_ANALYSIS_PLOT_PATTERN = "{symbol}_{interval}_{analysis_type}.png" # Updated to remove strategy from filename
-LABELING_ANALYSIS_TABLE_PATTERN = "{symbol}_{interval}_{analysis_type}.csv" # Updated to remove strategy from filename
+ 
 
 ANALYSIS_PLOT_PATTERN = "{symbol}_{interval}_{model_type}_{analysis_type}.png" # Generic plot pattern for model/backtest analysis
 ANALYSIS_TABLE_PATTERN = "{symbol}_{interval}_{model_type}_{analysis_type}.csv" # Generic table pattern for model/backtest analysis
@@ -100,11 +84,21 @@ ANALYSIS_TABLE_PATTERN = "{symbol}_{interval}_{model_type}_{analysis_type}.csv" 
 PATH_CONFIG = {
     'directories': {
         'raw': RAW_DATA_DIR,
-        'processed': PROCESSED_DATA_DIR,  # <-- ADDED for Phase 2
+        'processed': PROCESSED_DATA_DIR,
+        'labeled': LABELED_DATA_DIR,
+        'labeling_analysis': LABELING_ANALYSIS_BASE_DIR,
     },
     'patterns': {
         'raw': RAW_DATA_PATTERN,
-        'processed': PROCESSED_DATA_PATTERN, # <-- ADDED for Phase 2
+        'processed': PROCESSED_DATA_PATTERN,
+        'labeled': LABELED_DATA_PATTERN,
+        
+        # New patterns for labeling analysis artifacts
+        'labeling_analysis_plot': LABELING_ANALYSIS_PLOT_PATTERN,
+        'labeling_analysis_table': LABELING_ANALYSIS_TABLE_PATTERN,
+        
+        # Directory pattern for creating strategy-specific subfolders
+        'labeling_strategy_dir': LABELING_STRATEGY_DIR_PATTERN,
     }
 }
 
@@ -134,7 +128,7 @@ PATHS = {
     "analysis_dir": ANALYSIS_RESULTS_DIR, # Base analysis directory
     "model_analysis_dir": MODEL_ANALYSIS_DIR,
     "labeling_analysis_base_dir": LABELING_ANALYSIS_BASE_DIR, # Base directory for all labeling analysis
-    "labeling_strategy_analysis_dir_pattern": LABELING_STRATEGY_ANALYSIS_DIR_PATTERN_STR, # NEW: now a string pattern
+    "labeling_strategy_analysis_dir_pattern": LABELING_STRATEGY_DIR_PATTERN, # NEW: now a string pattern
     "backtesting_analysis_dir": BACKTESTING_ANALYSIS_DIR,
     "live_trading_analysis_dir": LIVE_TRADING_ANALYSIS_DIR,
 
