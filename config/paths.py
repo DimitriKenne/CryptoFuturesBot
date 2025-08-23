@@ -31,7 +31,7 @@ LIVE_TRADING_RESULTS_DIR = RESULTS_DIR / "live_trading"
 
 # Analysis subdirectories
 LABELING_ANALYSIS_BASE_DIR = ANALYSIS_RESULTS_DIR / "labeling"
-MODEL_ANALYSIS_DIR = ANALYSIS_RESULTS_DIR / "model" 
+MODEL_ANALYSIS_BASE_DIR = ANALYSIS_RESULTS_DIR / "model" 
 BACKTESTING_ANALYSIS_DIR = ANALYSIS_RESULTS_DIR / "backtesting"
 LIVE_TRADING_ANALYSIS_DIR = ANALYSIS_RESULTS_DIR / "live_trading"
 
@@ -83,24 +83,60 @@ ANALYSIS_TABLE_PATTERN = "{symbol}_{interval}_{model_type}_{analysis_type}.csv" 
 # ==============================================================================
 PATH_CONFIG = {
     'directories': {
-        'raw': RAW_DATA_DIR,
-        'processed': PROCESSED_DATA_DIR,
-        'labeled': LABELED_DATA_DIR,
-        'labeling_analysis': LABELING_ANALYSIS_BASE_DIR,
+        # --- Base Directories ---
+        'models_base': MODELS_DIR,
+        'results_base': RESULTS_DIR,
+
+        # --- Data Subdirectories ---
+        'raw': DATA_DIR / "raw",
+        'processed': DATA_DIR / "processed",
+        'labeled': DATA_DIR / "labeled",
+
+        # --- Results Subdirectories ---
+        'labeling': RESULTS_DIR / "labeling",
+        'model_analysis': RESULTS_DIR / "model_analysis",
+        'backtesting': RESULTS_DIR / "backtesting",
+        'live_trading': RESULTS_DIR / "live_trading",
+        'monte_carlo': RESULTS_DIR / "monte_carlo",
     },
     'patterns': {
-        'raw': RAW_DATA_PATTERN,
-        'processed': PROCESSED_DATA_PATTERN,
-        'labeled': LABELED_DATA_PATTERN,
-        
-        # New patterns for labeling analysis artifacts
-        'labeling_analysis_plot': LABELING_ANALYSIS_PLOT_PATTERN,
-        'labeling_analysis_table': LABELING_ANALYSIS_TABLE_PATTERN,
-        
-        # Directory pattern for creating strategy-specific subfolders
-        'labeling_strategy_dir': LABELING_STRATEGY_DIR_PATTERN,
+        # --- Data File Patterns ---
+        'raw_data': "{symbol}_{interval}_raw.parquet",
+        'processed_data': "{symbol}_{interval}_processed.parquet",
+        'labeled_data': "{symbol}_{interval}_labeled.parquet", # CORRECTED: The official, single labeled file
+
+        # --- Labeling Analysis Directory & File Patterns ---
+        'labeling_run_dir': "{symbol}_{interval}",
+        'labeling_plot': "{analysis_type}_{labeling_strategy}.png", # Plots are distinguished by strategy
+        'labeling_table': "{analysis_type}_{labeling_strategy}.csv", 
+
+
+        # --- Model Training Directory & File Patterns ---
+        'model_run_dir': "{model_type}/{symbol}_{interval}",
+        'model_pipeline': "pipeline.pkl",
+        'model_metadata': "metadata.json",
+        'model_preprocessor': "preprocessor.pkl",
+        'model_keras': "model.keras",
+        'model_evaluation': "evaluation_metrics.json",
+        'model_feature_importance': "feature_importance.csv",
+        'model_plot': "{plot_type}.png",
+
+        # --- Backtesting Directory & File Patterns ---
+        'backtesting_run_dir': "{model_type}/{symbol}_{interval}",
+        'backtest_trades': "trades.parquet",
+        'backtest_equity': "equity.parquet",
+        'backtest_metrics_json': "summary_metrics.json",
+        'backtest_metrics_csv': "summary_metrics.csv",
+        'backtest_plot': "{plot_type}.png",
+
+        # --- Monte Carlo Directory & File Patterns ---
+        'monte_carlo_run_dir': "{model_type}/{symbol}_{interval}/{timestamp}_mode_{mode}_sims_{num_simulations}",
+        'mc_summary_stats': "1_performance_summary_stats.csv",
+        'mc_raw_metrics': "all_simulation_metrics.csv",
+        'mc_plot': "{plot_type}.png",
     }
 }
+
 
 
 
@@ -126,7 +162,7 @@ PATHS = {
     "backtesting_results_dir": BACKTESTING_RESULTS_DIR,
     "live_trading_results_dir": LIVE_TRADING_RESULTS_DIR,
     "analysis_dir": ANALYSIS_RESULTS_DIR, # Base analysis directory
-    "model_analysis_dir": MODEL_ANALYSIS_DIR,
+    "model_analysis_dir": MODEL_ANALYSIS_BASE_DIR,
     "labeling_analysis_base_dir": LABELING_ANALYSIS_BASE_DIR, # Base directory for all labeling analysis
     "labeling_strategy_analysis_dir_pattern": LABELING_STRATEGY_DIR_PATTERN, # NEW: now a string pattern
     "backtesting_analysis_dir": BACKTESTING_ANALYSIS_DIR,

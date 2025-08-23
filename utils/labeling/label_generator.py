@@ -21,7 +21,6 @@ from matplotlib.figure import Figure
 logger = logging.getLogger(__name__)
 
 # Dynamically Map Labeling Strategy Names to Strategy Classes
-# Using your superior implementation with robust logging.
 LABELING_STRATEGY_MAP: Dict[str, Type[BaseLabelingStrategy]] = {}
 for i in range(1, 5):
     strategy_key = f'labeling_strategy_{i}'
@@ -83,18 +82,24 @@ class LabelGenerator:
                 df_original_input=df.copy(), plotter=plotter, calculator=calculator
             )
             
+            # Get the single analysis directory for this asset.
+            analysis_dir = dm.get_labeling_analysis_dir(symbol=symbol, interval=interval)
+            
             for analysis_type, artifact in artifacts:
-                kwargs = {
-                    'labeling_strategy': self.labeling_strategy.__class__.__name__,
-                    'symbol': symbol, 'interval': interval
-                }
-                if isinstance(artifact, pd.DataFrame):
-                    dm.save_analysis_table(df=artifact, analysis_type=analysis_type, **kwargs)
-                elif isinstance(artifact, Figure):
-                    dm.save_analysis_plot(fig=artifact, analysis_type=analysis_type, **kwargs)
+                if isinstance(artifact, Figure):
+                    plot_kwargs = {
+                        'analysis_type': analysis_type,
+                        'labeling_strategy': self.labeling_strategy.__class__.__name__
+                    }
+                    dm.save_analysis_plot(
+                        fig=artifact,
+                        run_dir=analysis_dir,
+                        plot_pattern_key='labeling_plot',
+                        **plot_kwargs
+                    )
                     plt.close(artifact)
                 else:
-                    self.logger.warning(f"Unknown artifact type '{type(artifact)}' for analysis '{analysis_type}'.")
+                    self.logger.warning(f"Unknown artifact type '{type(artifact)}' for analysis '{analysis_type}'. Skipping save.")
         except Exception as e:
             self.logger.error(f"Error during strategy-specific analysis: {e}", exc_info=True)
 

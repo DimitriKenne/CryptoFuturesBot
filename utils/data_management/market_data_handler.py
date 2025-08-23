@@ -134,7 +134,7 @@ class MarketDataHandler:
             raw_ohlcv_data.index = raw_ohlcv_data.index.tz_convert(timezone.utc)
 
         try:
-            self.model_trainer.load(symbol=self.symbol, interval=self.interval, model_key=self.model_type)
+            self.model_trainer.load(symbol=self.symbol, interval=self.interval, model_type=self.model_type)
             self.logger.info(f"Model '{self.model_type}' loaded for signal generation.")
         except Exception as e:
             self.logger.critical(f"Failed to load model '{self.model_type}': {e}. Cannot generate signals.", exc_info=True)
@@ -256,7 +256,7 @@ class MarketDataHandler:
 
             featured_data = self.feature_engineer.process(raw_ohlcv_df.copy())
 
-            self.model_trainer.load(symbol=self.symbol, interval=self.interval, model_key=self.model_type)
+            self.model_trainer.load(symbol=self.symbol, interval=self.interval, model_type=self.model_type)
 
             model_feature_cols = self.model_trainer.feature_columns_original
             if not model_feature_cols:

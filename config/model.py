@@ -1,4 +1,4 @@
-# config/model_config_schema.py
+# config/model.py
 
 from dataclasses import dataclass, field
 from typing import Dict, Any, List, Literal, Optional, Union
@@ -50,7 +50,7 @@ class RandomForestParams:
 
 @dataclass
 class LSTMParams:
-    sequence_length_bars: int = 5
+    sequence_length_bars: int = 5 # Centralized sequence length for LSTM
     n_features: Optional[int] = None
     units_per_layer: int = 50
     n_layers: int = 2
@@ -65,7 +65,7 @@ class LSTMParams:
     reduce_lr_on_plateau_factor: Optional[float] = 0.1
     reduce_lr_on_plateau_patience: Optional[int] = 5
     class_balancing: Optional[Union[str, Dict[str, Any]]] = None
-    dense_units: Optional[int] = None # Added new parameter for intermediate dense layer
+    dense_units: Optional[int] = 2
 
 @dataclass
 class XGBoostTuningParams:
@@ -100,8 +100,12 @@ class ModelConfig:
     label_column: str = 'label'
     train_test_split_ratio: float = 0.8
     scaler_type: Optional[Literal['standard', 'minmax']] = 'standard'
-    pca_enabled: bool = True
-    pca_n_components: float = 10
+    
+    # --- MODIFIED/ADDED SECTION ---
+    pca_enabled: bool = False  # Default to False, enable via CLI
+    pca_n_components: Union[int, float] = 0.95  # More intuitive type and default
+    # --- END MODIFIED/ADDED SECTION ---
+
     tuning_scoring_metric: str = 'f1_macro'
 
     TF_AVAILABLE: bool = field(default=TF_AVAILABLE, init=False, repr=False)

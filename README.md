@@ -1,5 +1,9 @@
 # Algorithmic Futures Trading Bot: Machine Learning-Driven Trading Strategy
 
+
+**Author:** DimitriKenne
+**Last Updated:** 2025-08-22
+
 This project presents a sophisticated algorithmic trading bot designed for futures markets, leveraging advanced machine learning techniques for predictive signal generation and robust risk management. Built with a modular and extensible architecture, this bot facilitates end-to-end automation of trading strategies, from data acquisition and feature engineering to model training, backtesting, and live execution.
 
 ---
@@ -380,4 +384,4 @@ Contributions are welcome! Please follow standard GitHub flow: fork the reposito
 
 ## License
 
-This project is open-source and available under the [MIT License](http://docs.google.com/LICENSE)
+This project is open-source and available under the [MIT License](https://opensource.org/licenses/MIT).

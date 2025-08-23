@@ -3,8 +3,6 @@ Config validation for schema dataclasses.
 Call validate_config(config_instance) for any config object.
 """
 
-# Import FeatureConfig here. This specific import order works because
-# validate_feature_config is defined after FeatureConfig in its own file.
 from config.feature import FeatureConfig, TemporalValidationConfig
 
 def validate_general_config(config):
@@ -17,7 +15,6 @@ def validate_general_config(config):
     if config.hyperparameter_tuning_cv_folds <= 0:
         raise ValueError("hyperparameter_tuning_cv_folds must be > 0.")
     
-    # New validations for dynamic trade loop interval
     if not isinstance(config.data_granularity_minutes, (int, float)) or config.data_granularity_minutes <= 0:
         raise ValueError("data_granularity_minutes must be a positive number.")
     if not isinstance(config.min_trade_loop_interval_seconds, (int, float)) or config.min_trade_loop_interval_seconds <= 0:
@@ -31,7 +28,6 @@ def validate_feature_config(config: FeatureConfig):
     Validates the fields of a FeatureConfig instance.
     This function contains the comprehensive field-level validation logic.
     """
-    # Basic validation for list types
     period_lists = ['sma_periods', 'ema_periods', 'rsi_periods', 'bollinger_periods', 'atr_periods',
                     'stochastic_periods', 'ao_periods', 'cci_periods', 'mfi_periods', 'volume_periods',
                     'support_resistance_periods', 'z_score_periods', 'adr_periods', 'trend_strength_periods']
@@ -42,14 +38,13 @@ def validate_feature_config(config: FeatureConfig):
 
     if config.pivot_point_calculation_period not in ['daily', 'weekly', 'monthly']:
         raise ValueError("pivot_point_calculation_period must be 'daily', 'weekly', or 'monthly'.")
-    if config.pivot_point_method not in ['standard']: # Extend as more methods are implemented
+    if config.pivot_point_method not in ['standard']:
         raise ValueError("pivot_point_method must be 'standard'.")
     if not isinstance(config.candlestick_patterns, list) or not all(isinstance(x, str) for x in config.candlestick_patterns):
         raise ValueError("'candlestick_patterns' must be a list of strings.")
     if not isinstance(config.fvg_lookback_bars, int) or config.fvg_lookback_bars <= 0:
         raise ValueError("'fvg_lookback_bars' must be a positive integer.")
     
-    # Validate swing pivot parameters
     if not isinstance(config.swing_pivot_left_bars, int) or config.swing_pivot_left_bars <= 0:
         raise ValueError("swing_pivot_left_bars must be a positive integer.")
     if not isinstance(config.swing_pivot_right_bars, int) or config.swing_pivot_right_bars <= 0:
@@ -63,27 +58,21 @@ def validate_feature_config(config: FeatureConfig):
     if not isinstance(config.volume_threshold, (int, float)) or config.volume_threshold < 0:
         raise ValueError("volume_threshold must be a non-negative number.")
 
-    if not isinstance(config.sequence_length_bars, int) or config.sequence_length_bars <= 0:
-        raise ValueError("'sequence_length_bars' must be a positive integer.")
-    
     if not isinstance(config.remove_nan_rows, bool):
         raise TypeError("'remove_nan_rows' must be a boolean.")
 
-    # Validate lagged_features configuration
     for col, lags in config.lagged_features.items():
         if not isinstance(col, str) or not col:
             raise ValueError(f"Lagged feature column name must be a non-empty string, got '{col}'.")
         if not (isinstance(lags, list) and all(isinstance(l, int) and l > 0 for l in lags)):
             raise ValueError(f"Lags for '{col}' must be a list of positive integers, got {lags}.")
 
-    # Validate differenced_features configuration
     for col, orders in config.differenced_features.items():
         if not isinstance(col, str) or not col:
             raise ValueError(f"Differenced feature column name must be a non-empty string, got '{col}'.")
         if not (isinstance(orders, list) and all(isinstance(o, int) and o > 0 for o in orders)):
             raise ValueError(f"Differencing orders for '{col}' must be a list of positive integers, got {orders}.")
     
-    # Validate temporal_validation fields directly (assuming it's already an object)
     tv = config.temporal_validation
     if not isinstance(tv.enabled, bool):
         raise TypeError("TemporalValidationConfig: enabled must be bool.")
@@ -94,7 +83,6 @@ def validate_feature_config(config: FeatureConfig):
     if tv.warning_correlation_threshold > tv.error_correlation_threshold:
         raise ValueError("TemporalValidationConfig: warning_correlation_threshold cannot be greater than error_correlation_threshold.")
     
-    # Validations for TA library availability flags
     if not isinstance(config.talib_available, bool):
         raise TypeError("talib_available must be a boolean.")
     if not isinstance(config.ta_lib_available, bool):
@@ -140,6 +128,52 @@ def validate_notifier_config(config):
         if not isinstance(tg.chat_id, str) or not tg.chat_id:
             raise ValueError("TelegramConfig: chat_id required if enabled.")
 
+def validate_xgboost_params(params):
+    if not isinstance(params.n_estimators, int) or params.n_estimators <= 0:
+        raise ValueError("XGBoostParams: n_estimators must be positive int.")
+    if not isinstance(params.learning_rate, float) or not (0 < params.learning_rate <= 1):
+        raise ValueError("XGBoostParams: learning_rate must be float in (0, 1].")
+    if not isinstance(params.max_depth, int) or params.max_depth <= 0:
+        raise ValueError("XGBoostParams: max_depth must be positive int.")
+    if not isinstance(params.subsample, float) or not (0 < params.subsample <= 1):
+        raise ValueError("XGBoostParams: subsample must be float in (0, 1].")
+    if not isinstance(params.colsample_bytree, float) or not (0 < params.colsample_bytree <= 1):
+        raise ValueError("XGBoostParams: colsample_bytree must be float in (0, 1].")
+    if not isinstance(params.n_jobs, int):
+        raise TypeError("XGBoostParams: n_jobs must be int.")
+
+def validate_random_forest_params(params):
+    if not isinstance(params.n_estimators, int) or params.n_estimators <= 0:
+        raise ValueError("RandomForestParams: n_estimators must be positive int.")
+    if not isinstance(params.max_depth, int) or params.max_depth <= 0:
+        raise ValueError("RandomForestParams: max_depth must be positive int.")
+    if not isinstance(params.min_samples_leaf, int) or params.min_samples_leaf <= 0:
+        raise ValueError("RandomForestParams: min_samples_leaf must be positive int.")
+    if not isinstance(params.min_samples_split, int) or params.min_samples_split <= 0:
+        raise ValueError("RandomForestParams: min_samples_split must be positive int.")
+    if not isinstance(params.n_jobs, int):
+        raise TypeError("RandomForestParams: n_jobs must be int.")
+
+def validate_lstm_params(params):
+    if not isinstance(params.sequence_length_bars, int) or params.sequence_length_bars <= 0:
+        raise ValueError("LSTMParams: sequence_length_bars must be positive int.")
+    if params.n_features is not None and (not isinstance(params.n_features, int) or params.n_features <= 0):
+        raise ValueError("LSTMParams: n_features must be None or positive int.")
+    if not isinstance(params.units_per_layer, int) or params.units_per_layer <= 0:
+        raise ValueError("LSTMParams: units_per_layer must be positive int.")
+    if not isinstance(params.n_layers, int) or params.n_layers <= 0:
+        raise ValueError("LSTMParams: n_layers must be positive int.")
+    if not isinstance(params.epochs, int) or params.epochs <= 0:
+        raise ValueError("LSTMParams: epochs must be positive int.")
+    if not isinstance(params.batch_size, int) or params.batch_size <= 0:
+        raise ValueError("LSTMParams: batch_size must be positive int.")
+    if not isinstance(params.validation_split, float) or not (0 < params.validation_split < 1):
+        raise ValueError("LSTMParams: validation_split must be float in (0, 1).")
+    if not isinstance(params.dropout_rate, float) or not (0 <= params.dropout_rate < 1):
+        raise ValueError("LSTMParams: dropout_rate must be float in [0, 1).")
+    if not isinstance(params.learning_rate, float) or params.learning_rate <= 0:
+        raise ValueError("LSTMParams: learning_rate must be positive float.")
+
 def validate_model_config(config):
     if config.model_type not in ['xgboost', 'random_forest', 'lstm']:
         raise ValueError("model_type must be 'xgboost', 'random_forest', or 'lstm'.")
@@ -153,8 +187,15 @@ def validate_model_config(config):
         raise ValueError("scaler_type must be 'standard', 'minmax', or None.")
     if not isinstance(config.pca_enabled, bool):
         raise TypeError("pca_enabled must be bool.")
-    if not isinstance(config.pca_n_components, (int, float)) or (isinstance(config.pca_n_components, float) and not (0 < config.pca_n_components <= 1)):
-        raise ValueError("pca_n_components must be int > 0 or float in (0, 1].")
+    if not isinstance(config.pca_n_components, (int, float)) or \
+       (isinstance(config.pca_n_components, float) and not (0 < config.pca_n_components <= 1)) or \
+       (isinstance(config.pca_n_components, int) and config.pca_n_components <= 0):
+        raise ValueError("pca_n_components must be an int > 0 or a float in (0, 1].")
+
+    # --- ADDED: Validate each model type config ---
+    validate_xgboost_params(config.xgboost_params)
+    validate_random_forest_params(config.random_forest_params)
+    validate_lstm_params(config.lstm_params)
 
 def validate_label_config(config):
     if config.labeling_strategy_type not in [
@@ -173,7 +214,6 @@ def validate_label_config(config):
     if not isinstance(config.analysis_future_horizons, list) or not all(isinstance(x, int) and x > 0 for x in config.analysis_future_horizons):
         raise ValueError("analysis_future_horizons must be a list of positive integers.")
 
-    # Validate each strategy config's pct fields
     s1 = config.labeling_strategy_1
     if not (0 <= s1.profit_multiplier_pct <= 1000):
         raise ValueError("LabelingStrategy1Config: profit_multiplier_pct must be 0-1000.")
@@ -290,11 +330,9 @@ def validate_config(config):
         validate_label_config(config)
     elif name == "AppConfig":
         validate_general_config(config.general)
-        validate_feature_config(config.feature)
+        validate_feature_config(config.features)
         validate_trading_config(config.trading)
         validate_exchange_config(config.exchange)
         validate_notifier_config(config.notifier)
         validate_model_config(config.model)
         validate_label_config(config.labeling)
-    # Add more elifs for other config types as needed
-

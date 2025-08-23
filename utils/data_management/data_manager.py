@@ -1,5 +1,6 @@
 # utils/data_manager.py
 import pandas as pd
+import numpy as np
 from pathlib import Path
 import logging
 import os
@@ -7,6 +8,7 @@ import joblib # Joblib is often used for saving/loading models and potentially m
 import sys # Import sys for checking modules
 from typing import Optional, Any, Dict, Union # Import Dict and Union
 from matplotlib.figure import Figure
+import json # Import json for metadata and evaluation results
 
 # Set up logging for the data manager
 logger = logging.getLogger(__name__)
@@ -108,107 +110,134 @@ class DataManager:
 
     def _ensure_base_dirs(self):
         """Ensures that the fundamental directories defined in PATH_CONFIG exist."""
-        for directory in self.path_config.get('directories', {}).values():
-            try:
-                Path(directory).mkdir(parents=True, exist_ok=True)
-            except Exception as e:
-                self.logger.error(f"Could not create base directory at {directory}: {e}", exc_info=True)
+        for key, directory in self.path_config.get('directories', {}).items():
+            if key.endswith('_base'): # Only create base directories
+                try:
+                    Path(directory).mkdir(parents=True, exist_ok=True)
+                except Exception as e:
+                    self.logger.error(f"Could not create base directory at {directory}: {e}", exc_info=True)
 
     # ==============================================================================
-    # --- NEW, PREFERRED METHODS (For Labeling Refactor and Future Use) ---
+    # --- NEW, PREFERRED METHODS (For Labeling, Backtesting, MC, and future use) ---
     # ==============================================================================
 
-    def get_path(self, data_type: str, **kwargs) -> Path:
-        """Constructs a file path for any data type defined in PATH_CONFIG."""
-        try:
-            directory = self.path_config['directories'][data_type]
-            pattern = self.path_config['patterns'][data_type]
-        except KeyError:
-            raise ValueError(f"Path configuration for data_type '{data_type}' not found in PATH_CONFIG.")
+    def _get_run_dir(self, base_dir_key: str, run_dir_pattern_key: str, **kwargs) -> Path:
+        """Generic helper to create and get a unique directory for a specific run."""
+        base_dir = Path(self.path_config['directories'][base_dir_key])
+        run_dir_pattern = self.path_config['patterns'][run_dir_pattern_key]
+        safe_kwargs = {k: str(v).replace('/', '_').replace(':', '_') for k, v in kwargs.items()}
+        run_dir = base_dir / run_dir_pattern.format(**safe_kwargs)
+        run_dir.mkdir(parents=True, exist_ok=True)
+        return run_dir
 
-        safe_kwargs = {k: str(v).replace('/', '_') for k, v in kwargs.items()}
-        filename = pattern.format(**safe_kwargs)
-        return Path(directory) / filename
+    def get_labeling_analysis_dir(self, symbol: str, interval: str) -> Path:
+        """Gets the unique directory for a specific labeling analysis run."""
+        return self._get_run_dir('labeling', 'labeling_run_dir', symbol=symbol, interval=interval)
+    
+    def get_backtesting_dir(self, model_type: str, symbol: str, interval: str) -> Path:
+        """Gets the unique directory for a specific backtesting run."""
+        return self._get_run_dir('backtesting', 'backtesting_run_dir', model_type=model_type, symbol=symbol, interval=interval)
 
-    # *** MODIFIED: This method now requires symbol and interval ***
-    def get_analysis_dir(self, labeling_strategy: str, symbol: str, interval: str) -> Path:
-        """
-        Creates and returns the Path for a strategy-specific analysis sub-directory
-        that now includes the symbol and interval in its name.
-        """
-        try:
-            dir_pattern_str = str(self.path_config['patterns']['labeling_strategy_dir'])
-            
-            # Sanitize inputs for directory naming
-            safe_symbol = symbol.replace('/', '_').upper()
-            safe_interval = interval.replace(':', '_')
-            
-            analysis_dir = Path(dir_pattern_str.format(
-                labeling_strategy=labeling_strategy,
-                symbol=safe_symbol,
-                interval=safe_interval
-            ))
-            
-            analysis_dir.mkdir(parents=True, exist_ok=True)
-            self.logger.debug(f"Ensured analysis directory exists: {analysis_dir}")
-            return analysis_dir
-        except KeyError:
-            raise ValueError("Path pattern for 'labeling_strategy_dir' not found in PATH_CONFIG.")
-        except Exception as e:
-            self.logger.error(f"Failed to create analysis directory for strategy '{labeling_strategy}': {e}", exc_info=True)
-            raise
+    def get_monte_carlo_dir(self, model_type: str, symbol: str, interval: str, timestamp: str, mode: str, num_simulations: int) -> Path:
+        """Gets the unique, timestamped directory for a Monte Carlo analysis run."""
+        return self._get_run_dir(
+            'monte_carlo', 'monte_carlo_run_dir',
+            model_type=model_type, symbol=symbol, interval=interval,
+            timestamp=timestamp, mode=mode, num_simulations=num_simulations
+        )
 
     def save_dataframe(self, df: pd.DataFrame, data_type: str, **kwargs):
         """Saves a DataFrame (e.g., raw, processed, labeled) to a parquet file."""
-        file_path = self.get_path(data_type, **kwargs)
+        directory = Path(self.path_config['directories'][data_type])
+        pattern = self.path_config['patterns'][f"{data_type}_data"]
+        safe_kwargs = {k: str(v).replace('/', '_') for k, v in kwargs.items()}
+        filename = pattern.format(**safe_kwargs)
+        file_path = directory / filename
         self.logger.info(f"Saving '{data_type}' dataframe to: {file_path}")
         file_path.parent.mkdir(parents=True, exist_ok=True)
         df.to_parquet(file_path, index=True)
 
     def load_dataframe(self, data_type: str, **kwargs) -> Optional[pd.DataFrame]:
         """Loads a DataFrame (e.g., raw, processed, labeled) from a parquet file."""
-        file_path = self.get_path(data_type, **kwargs)
+        directory = Path(self.path_config['directories'][data_type])
+        pattern = self.path_config['patterns'][f"{data_type}_data"]
+        safe_kwargs = {k: str(v).replace('/', '_') for k, v in kwargs.items()}
+        filename = pattern.format(**safe_kwargs)
+        file_path = directory / filename
         if not file_path.exists():
             self.logger.warning(f"Dataframe file not found: {file_path}")
             return None
         self.logger.info(f"Loading '{data_type}' dataframe from: {file_path}")
         return pd.read_parquet(file_path)
 
-    # *** MODIFIED: Now passes symbol and interval to get_analysis_dir ***
-    def save_analysis_table(self, df: pd.DataFrame, analysis_type: str, labeling_strategy: str, **kwargs):
-        """Saves an analysis table (DataFrame) to a CSV in the correct strategy subfolder."""
-        symbol = kwargs.get('symbol')
-        interval = kwargs.get('interval')
-        if not symbol or not interval:
-            raise ValueError("save_analysis_table requires 'symbol' and 'interval' in kwargs.")
+    def save_analysis_plot(self, fig: Figure, run_dir: Path, plot_pattern_key: str, **kwargs):
+        """Saves an analysis plot to a specified run directory using a specified pattern key."""
+        filename = self.path_config['patterns'][plot_pattern_key].format(**kwargs)
+        path = run_dir / filename
+        self.logger.info(f"Saving plot with pattern '{plot_pattern_key}' to: {path}")
+        fig.savefig(path, dpi=150, bbox_inches='tight')
+        
+    def save_analysis_table(self, df: pd.DataFrame, run_dir: Path, table_pattern_key: str, **kwargs):
+        """Saves an analysis table (DataFrame) to a specified run directory as a CSV."""
+        filename = self.path_config['patterns'][table_pattern_key].format(**kwargs)
+        path = run_dir / filename
+        self.logger.info(f"Saving table with pattern '{table_pattern_key}' to: {path}")
+        df.to_csv(path, index=True)
+
+    def save_backtest_results(self, trades_df: pd.DataFrame, equity_df: pd.DataFrame, metrics: Dict, model_type: str, symbol: str, interval: str):
+        """Saves all artifacts from a single backtest run to its dedicated directory."""
+        run_dir = self.get_backtesting_dir(model_type, symbol, interval)
+        self.logger.info(f"Saving backtest results to directory: {run_dir}")
+        trades_df.to_parquet(run_dir / self.path_config['patterns']['backtest_trades'])
+        equity_df.to_parquet(run_dir / self.path_config['patterns']['backtest_equity'])
+        sanitized_metrics = self._sanitize_for_json(metrics)
+        with open(run_dir / self.path_config['patterns']['backtest_metrics_json'], 'w') as f:
+            json.dump(sanitized_metrics, f, indent=4)
+        pd.DataFrame([sanitized_metrics]).to_csv(run_dir / self.path_config['patterns']['backtest_metrics_csv'], index=False)
+        self.logger.info("Saved trades, equity, and metrics for backtest run.")
+
+    def _sanitize_for_json(self, data: Any) -> Any:
+        if isinstance(data, dict): return {k: self._sanitize_for_json(v) for k, v in data.items()}
+        if isinstance(data, list): return [self._sanitize_for_json(i) for i in data]
+        if isinstance(data, np.integer): return int(data)
+        if isinstance(data, np.floating): return float(data)
+        if isinstance(data, np.ndarray): return data.tolist()
+        return data
+    
+    
+    # ==============================================================================
+    # --- NEW METHODS (Refactored for Model Training) ---
+    # ==============================================================================
+    def get_model_dir(self, model_type: str, symbol: str, interval: str) -> Path:
+        """Gets the unique directory for a specific model's trained artifacts."""
+        return self._get_run_dir('models_base', 'model_run_dir', model_type=model_type, symbol=symbol, interval=interval)
+
+    def get_model_analysis_dir(self, model_type: str, symbol: str, interval: str) -> Path:
+        """Gets the unique directory for a specific model's analysis results."""
+        return self._get_run_dir('model_analysis', 'model_run_dir', model_type=model_type, symbol=symbol, interval=interval)
+
+    def save_evaluation_results(self, results: Dict, model_type: str, symbol: str, interval: str):
+        analysis_dir = self.get_model_analysis_dir(model_type, symbol, interval)
+        filename = self.path_config['patterns']['model_evaluation']
+        path = analysis_dir / filename
+        self.logger.info(f"Saving evaluation results to: {path}")
+        with open(path, 'w') as f:
+            json.dump(self._sanitize_for_json(results), f, indent=4)
             
-        analysis_dir = self.get_analysis_dir(labeling_strategy, symbol, interval)
-        pattern = str(self.path_config['patterns']['labeling_analysis_table'])
-        
-        safe_kwargs = {k: str(v).replace('/', '_') for k, v in kwargs.items()}
-        filename = pattern.format(analysis_type=analysis_type, **safe_kwargs)
-        file_path = analysis_dir / filename
-        
-        self.logger.info(f"Saving analysis table '{analysis_type}' to: {file_path}")
-        df.to_csv(file_path, index=True)
+    def save_feature_importance(self, df: pd.DataFrame, model_type: str, symbol: str, interval: str):
+        analysis_dir = self.get_model_analysis_dir(model_type, symbol, interval)
+        filename = self.path_config['patterns']['model_feature_importance']
+        path = analysis_dir / filename
+        self.logger.info(f"Saving feature importance table to: {path}")
+        df.to_csv(path, index=False)
 
-    # *** MODIFIED: Now passes symbol and interval to get_analysis_dir ***
-    def save_analysis_plot(self, fig: Figure, analysis_type: str, labeling_strategy: str, **kwargs):
-        """Saves an analysis plot (Figure) to a PNG in the correct strategy subfolder."""
-        symbol = kwargs.get('symbol')
-        interval = kwargs.get('interval')
-        if not symbol or not interval:
-            raise ValueError("save_analysis_plot requires 'symbol' and 'interval' in kwargs.")
+    def save_model_plot(self, fig: Figure, plot_type: str, model_type: str, symbol: str, interval: str):
+        analysis_dir = self.get_model_analysis_dir(model_type, symbol, interval)
+        filename = self.path_config['patterns']['model_plot'].format(plot_type=plot_type)
+        path = analysis_dir / filename
+        self.logger.info(f"Saving plot '{plot_type}' to: {path}")
+        fig.savefig(path, dpi=150, bbox_inches='tight')
 
-        analysis_dir = self.get_analysis_dir(labeling_strategy, symbol, interval)
-        pattern = str(self.path_config['patterns']['labeling_analysis_plot'])
-
-        safe_kwargs = {k: str(v).replace('/', '_') for k, v in kwargs.items()}
-        filename = pattern.format(analysis_type=analysis_type, **safe_kwargs)
-        file_path = analysis_dir / filename
-        
-        self.logger.info(f"Saving analysis plot '{analysis_type}' to: {file_path}")
-        fig.savefig(file_path, dpi=150, bbox_inches='tight')
 
     # ==============================================================================
     # --- ORIGINAL METHODS (Unchanged for Backward Compatibility) ---
