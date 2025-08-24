@@ -130,10 +130,20 @@ PATH_CONFIG = {
         'backtest_plot': "{plot_type}.png",
 
         # --- Monte Carlo Directory & File Patterns ---
-        'monte_carlo_run_dir': "{model_type}/{symbol}_{interval}/{timestamp}_mode_{mode}_sims_{num_simulations}",
+        'monte_carlo_run_dir': "{model_type}/{symbol}_{interval}/mode_{mode}_sims_{num_simulations}",
         'mc_summary_stats': "1_performance_summary_stats.csv",
         'mc_raw_metrics': "all_simulation_metrics.csv",
         'mc_plot': "{plot_type}.png",
+        
+        # --- Live Trading Directory & File Patterns ---
+        'live_trading_run_dir': "{model_type}/{symbol}_{interval}",
+        'live_trades': "trades.parquet",
+        'live_equity': "equity.parquet",
+        'live_metrics_json': "summary_metrics.json",
+        'live_trading_state': "state.json", # NEW: For saving bot state
+        
+        # --- Visualization File Pattern ---
+        'trade_visualization_json': "trade_visualization_data.json",
     }
 }
 

@@ -1,10 +1,12 @@
 # utils/strategy_execution/trade_execution_engine.py
 
+import asyncio
 import logging
 import numpy as np
 import pandas as pd
 from datetime import datetime
 from typing import Dict, Any, Optional, Tuple, List
+from utils.exceptions import OrderExecutionError, ConfigurationError
 
 # Import the main AppConfig from your centralized configuration
 from config.params import AppConfig, FLOAT_EPSILON
@@ -446,3 +448,99 @@ class TradeExecutionEngine:
         self.logger.info(f"🔴 Trade closed due to '{exit_reason}' @ {actual_exit_price:.4f} | NetPnL: {net_pnl:.2f}")
         return completed_trade
 
+   # ====================================================================
+    # --- NEW Methods for Live Trading Workflow (No direct exchange interaction) ---
+    # ====================================================================
+
+    async def cancel_remaining_orders(self, position: Dict[str, Any], exit_reason: str):
+        """Orchestrates cancellation of the non-triggered SL/TP order."""
+        if self.exchange_adapter is None:
+            raise ConfigurationError("Exchange adapter is not configured in TradeExecutionEngine.")
+
+        sl_order_id = position.get('sl_order_id')
+        tp_order_id = position.get('tp_order_id')
+        symbol = position.get('symbol')
+
+        order_to_cancel = None
+        if exit_reason == 'stop_loss' and tp_order_id:
+            order_to_cancel = tp_order_id
+        elif exit_reason == 'take_profit' and sl_order_id:
+            order_to_cancel = sl_order_id
+        elif sl_order_id and tp_order_id:
+            # For other reasons (e.g., graceful shutdown), cancel both
+            await self.exchange_adapter.cancel_multiple_orders(symbol, [sl_order_id, tp_order_id])
+            return
+
+        if order_to_cancel and symbol:
+            await self.exchange_adapter.cancel_order(symbol, order_to_cancel)
+
+    def reconcile_open_position(self, trade_plan: Dict, entry_confirmation: Dict, sl_order: Dict, tp_order: Dict, liq_price: float) -> Dict[str, Any]:
+        """Creates the final, verified position dictionary using real data from the exchange."""
+        final_position = trade_plan.copy()
+        final_position.update({
+            'entry_price': entry_confirmation['avgPrice'],
+            'quantity': entry_confirmation['executedQty'],
+            'entry_time': entry_confirmation['time'],
+            'entry_order_id': entry_confirmation['orderId'],
+            'sl_order_id': sl_order['orderId'],
+            'tp_order_id': tp_order['orderId'],
+            'liquidation_price': liq_price
+        })
+        self.logger.info(f"Position reconciled with exchange data: ID {final_position['id']}")
+        return final_position
+
+    async def place_and_verify_sltp_orders(self, trade_plan: Dict) -> Tuple[Dict, Dict]:
+        """Places and robustly verifies SL and TP orders, returning confirmed order details."""
+        if self.exchange_adapter is None:
+            raise ConfigurationError("Exchange adapter is not configured in TradeExecutionEngine.")
+
+        symbol = trade_plan['direction_str'].upper()
+        side_to_close = 'SELL' if trade_plan['direction_str'] == 'long' else 'BUY'
+        quantity = trade_plan['quantity']
+
+        # Place SL
+        sl_order = await self.exchange_adapter.place_stop_market_order(
+            symbol=symbol, side=side_to_close, quantity=quantity, stop_price=trade_plan['stop_loss_price']
+        )
+        await self._verify_order(symbol, sl_order['orderId'])
+
+        # Place TP
+        tp_order = await self.exchange_adapter.place_take_profit_market_order(
+            symbol=symbol, side=side_to_close, quantity=quantity, stop_price=trade_plan['take_profit_price']
+        )
+        await self._verify_order(symbol, tp_order['orderId'])
+
+        return sl_order, tp_order
+
+    async def _verify_order(self, symbol: str, order_id: str, timeout: int = 10, delay: float = 0.5):
+        """Continuously checks an order's status until it's confirmed or times out."""
+        if self.exchange_adapter is None:
+            raise ConfigurationError("Exchange adapter is not configured for order verification.")
+
+        start_time = datetime.now()
+        while (datetime.now() - start_time).total_seconds() < timeout:
+            order_info = await self.exchange_adapter.get_order_info(symbol, order_id)
+            if order_info and order_info.get('status') == 'NEW':
+                self.logger.info(f"Order {order_id} successfully verified on exchange.")
+                return
+            await asyncio.sleep(delay)
+        raise OrderExecutionError(f"Failed to verify order {order_id} within {timeout} seconds.")
+
+    async def cleanup_failed_entry(self, symbol: str, entry_order: Optional[Dict], sl_order: Optional[Dict], tp_order: Optional[Dict]):
+        """Attempts to clean up any residual orders or positions from a failed entry sequence."""
+        if self.exchange_adapter is None: return
+
+        self.logger.warning("--- INITIATING FAILED ENTRY CLEANUP ---")
+        # Attempt to cancel any stray SL/TP orders that might have been placed
+        orders_to_cancel = [o['orderId'] for o in [sl_order, tp_order] if o and o.get('orderId')]
+        if orders_to_cancel:
+            await self.exchange_adapter.cancel_multiple_orders(symbol, orders_to_cancel)
+
+        # Check if a position was actually opened
+        open_positions = await self.exchange_adapter.get_open_positions(symbol)
+        if open_positions:
+            self.logger.critical(f"A position for {symbol} exists after failed entry. Attempting to close it immediately.")
+            pos_to_close = open_positions[0]
+            side_to_close = 'SELL' if pos_to_close['direction'] == 'long' else 'BUY'
+            await self.exchange_adapter.place_market_order(symbol, side_to_close, pos_to_close['quantity'], reduce_only=True)
+        self.logger.warning("--- FAILED ENTRY CLEANUP COMPLETE ---")

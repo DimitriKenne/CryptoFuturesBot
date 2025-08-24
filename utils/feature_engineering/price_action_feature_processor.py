@@ -39,39 +39,6 @@ class PriceActionFeatureProcessor:
         self.logger = logging.getLogger(self.__class__.__name__)
         self.logger.info("PriceActionFeatureProcessor initialized.")
 
-    @property
-    def required_lookback(self) -> int:
-        """
-        Calculates the maximum lookback required for all price action features.
-        """
-        period_sizes = []
-
-        # FVG lookback
-        period_sizes.append(self.config.fvg_lookback_bars)
-
-        # Swing Pivot lookback (left_bars + right_bars + 1 for the pivot itself)
-        # We need data from `left_bars` before the pivot point candidate and `right_bars` after it.
-        # The pivot itself is the (left_bars + 1)th bar in this window.
-        period_sizes.append(self.config.swing_pivot_left_bars + self.config.swing_pivot_right_bars + 1)
-
-        # Support/Resistance periods (rolling max/min on shifted data)
-        if self.config.support_resistance_periods:
-            period_sizes.append(max(self.config.support_resistance_periods))
-
-        # Standard Pivot Points (resampling dependent, typically previous day/week/month)
-        # We need the previous period's (day/week/month) OHLC.
-        # Max of these rules might be 28 or 30 days for monthly + 1 for the shift
-        if self.config.pivot_point_calculation_period == 'monthly':
-            period_sizes.append(31) # Max days in a month + 1 for previous month's last bar
-        elif self.config.pivot_point_calculation_period == 'weekly':
-            period_sizes.append(8) # Max days in a week + 1 for previous week's last bar
-        elif self.config.pivot_point_calculation_period == 'daily':
-            period_sizes.append(2) # Max days in a day + 1 for previous day's last bar
-
-        max_period_size = max(period_sizes) if period_sizes else 0
-        return max_period_size + 1 # Add one for input shift if necessary (e.g., using current bar for patterns, but shifted data for underlying inputs)
-
-
     def add_custom_pattern_features(self, df: pd.DataFrame) -> pd.DataFrame:
         """
         Adds Fair Value Gap (FVG) and Candlestick Pattern detection features.

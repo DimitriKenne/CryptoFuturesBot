@@ -62,38 +62,6 @@ class IndicatorFeatureProcessor:
                 self.logger.warning("'ta' library indicated as available in config but could not be imported. Some indicators will be unavailable.")
                 ta_lib_available = False
 
-
-    @property
-    def required_lookback(self) -> int:
-        """
-        Calculates the maximum lookback required for all technical and statistical indicators
-        and their derived features.
-        """
-        period_sizes = []
-
-        list_period_keys = [
-            'sma_periods', 'ema_periods', 'rsi_periods', 'bollinger_periods',
-            'atr_periods', 'stochastic_periods', 'ao_periods', 'cci_periods',
-            'mfi_periods', 'volume_periods', 'z_score_periods', 'adr_periods',
-            'trend_strength_periods' # Max of these two periods
-        ]
-        for key in list_period_keys:
-            values = getattr(self.config, key)
-            if isinstance(values, list):
-                for period in values:
-                    if isinstance(period, int) and period > 0:
-                        period_sizes.append(period)
-
-        # Specific periods not in the lists
-        period_sizes.append(self.config.volume_oscillator_long_ema)
-        
-        max_period_size = max(period_sizes) if period_sizes else 0
-        
-        # Add a buffer for calculations like ATR which might need more than just 'period' bars
-        # or for shifted inputs (most of these indicators take shifted data).
-        return max_period_size + 1 # +1 for the shift operation before calculation
-
-
     def add_core_technical_indicators(self, df: pd.DataFrame, interval: str) -> pd.DataFrame:
         """
         Adds base momentum, trend, volatility, volume, and statistical indicators.

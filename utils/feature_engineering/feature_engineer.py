@@ -80,40 +80,6 @@ class FeatureEngineer:
         self.indicator_processor = IndicatorFeatureProcessor(config=self.config)
         self.price_action_processor = PriceActionFeatureProcessor(config=self.config)
 
-    @property
-    def required_lookback(self) -> int:
-        """
-        Calculates the maximum lookback required across all types of feature engineering.
-        This is the number of *previous* bars needed to calculate features for the latest bar.
-        This calculation needs to consider the maximum lookback of *all* individual features
-        and their dependencies, including any internal shifts within sub-processors.
-        For simplicity, we can defer to the sub-processors and add a buffer.
-        """
-        # Get maximum lookback from individual processors (which should account for their internal shifts)
-        max_sub_processor_lookback = max(
-            self.indicator_processor.required_lookback,
-            self.price_action_processor.required_lookback
-        )
-        
-        # Consider additional lookback for FVG (if not handled by price_action_processor's lookback)
-        fvg_lookback = self.config.fvg_lookback_bars if self.config.fvg_lookback_bars > 0 else 0
-
-        # Consider lagged and differenced features that are applied at the end
-        max_lag = 0
-        if self.config.lagged_features:
-            max_lag = max([max(lags) for lags in self.config.lagged_features.values()] + [0])
-        max_diff = 0
-        if self.config.differenced_features:
-            max_diff = max([max(orders) for orders in self.config.differenced_features.values()] + [0])
-
-        # The overall required lookback is the maximum of all these, plus a small buffer
-        # Added +2 as a general safety margin for potential shifts or calculations involving multiple past bars.
-        calculated_lookback = max(max_sub_processor_lookback, fvg_lookback, max_lag, max_diff) + 2 
-
-        self.logger.debug(f"Calculated required lookback for FeatureEngineer: {calculated_lookback} bars.")
-        return calculated_lookback + 800
-
-
     def _validate_dataframe(self, df: pd.DataFrame):
         """
         Validates the input DataFrame structure and integrity.

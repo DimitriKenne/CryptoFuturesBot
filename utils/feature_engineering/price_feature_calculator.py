@@ -26,15 +26,6 @@ class PriceFeatureCalculator:
         self.logger = logging.getLogger(self.__class__.__name__)
         self.logger.info("PriceFeatureCalculator initialized.")
 
-    @property
-    def required_lookback(self) -> int:
-        """
-        Defines the maximum lookback needed for price transformation features.
-        """
-        # For log_returns (current / previous) needs 2 past bars relative to current bar being processed
-        # e.g., for bar t, log(close[t-1] / close[t-2])
-        return 2
-
     def add_price_transformations(self, df: pd.DataFrame) -> pd.DataFrame:
         """
         Adds basic price transformations (e.g., log returns, typical price) to the DataFrame.

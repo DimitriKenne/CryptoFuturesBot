@@ -3,302 +3,259 @@
 monte_carlo_backtest.py
 
 Orchestrates an advanced Monte Carlo backtesting workflow.
+This script has been refactored to use the modular, pure-function utilities.
 
 Workflow:
-1.  Loads full historical data.
-2.  Splits data into relevant segments based on 'backtest_mode' and 'train_ratio'.
-    - If backtest_mode='test': Splits into train_data (for GARCH fitting) and test_data (for simulation length/baseline).
-    - If backtest_mode='train' or 'full': The 'full' historical data is used for GARCH fitting, and the simulation
-      length/baseline is determined by the 'train_data' (if 'train' mode) or 'full_historical_data' (if 'full' mode).
-3.  Runs a standard, deterministic backtest on the relevant baseline data to establish a comparison.
-4.  Fits a GARCH(1,1)+jump model to the **appropriate historical data segment** (train_data or full_historical_data).
-5.  Generates synthetic OHLCV data paths incorporating the fitted GARCH-modeled diffusion and a Poisson-driven jump process.
-6.  Loops for a specified number of simulations:
-    a. Generates a synthetic OHLCV data path using PricePathSimulator, matching the length of the chosen baseline data.
-    b. Utilizes the modular Backtester directly with this synthetic data for processing and signal generation.
-    c. Runs a backtest using the modular Backtester with the processed synthetic data.
-    d. Stores the summary metrics and the full equity curve from each run.
-7.  Aggregates all results and uses MonteCarloAnalyzer to generate and save:
-    a. Statistical summary of performance metrics (CSV).
-    b. Distribution plots for key metrics (e.g., Total Return).
-    c. A comparative plot of simulated equity curves vs. the deterministic baseline.
-    d. A risk/reward scatter plot (Return vs. Drawdown).
-    e. A sample of simulated OHLCV paths.
-8.  Saves all artifacts to a dedicated, non-conflicting subdirectory.
+1.  Loads full historical data using a DataManager.
+2.  Splits data into 'garch_fitting_data' and 'simulation_baseline_data' based on the chosen mode.
+3.  Runs a standard, deterministic backtest on 'simulation_baseline_data' to establish a baseline for comparison.
+4.  Initializes the PricePathSimulator with 'garch_fitting_data'.
+5.  Loops for a specified number of simulations:
+    a. Generates a synthetic OHLCV data path.
+    b. Runs the Backtester with the synthetic data.
+    c. Uses PerformanceAnalyzer to calculate metrics for that single run.
+    d. Stores the metrics and equity curve from each simulation.
+6.  Initializes MonteCarloAnalyzer with all collected results.
+7.  Calls MonteCarloAnalyzer to generate aggregate tables and plots.
+8.  Calls a single method in DataManager to save all artifacts to a unique, timestamped directory.
 """
 
 import argparse
 import logging
 import sys
 from pathlib import Path
-from typing import Optional, List, Dict, Any, Tuple
+from typing import List, Dict, Any
 import pandas as pd
-import numpy as np
-from tqdm import tqdm # For progress bars
+from tqdm import tqdm
 
 # --- IMPORTANT: Set Matplotlib backend BEFORE importing pyplot ---
 import matplotlib
-matplotlib.use('Agg') # Use the 'Agg' backend for non-interactive plotting
-import matplotlib.pyplot as plt
-import seaborn as sns # For enhanced plotting
+matplotlib.use('Agg')
 
 # --- Add Project Root to sys.path ---
-# This ensures that imports like 'config.params' and 'utils.<module>' work correctly
 try:
-    script_dir = Path(__file__).resolve().parent
-    PROJECT_ROOT = script_dir.parent
+    PROJECT_ROOT = Path(__file__).resolve().parent.parent
 except NameError:
-    # Fallback for environments where __file__ might not be defined (e.g., some interactive shells)
     PROJECT_ROOT = Path('.').resolve()
 sys.path.insert(0, str(PROJECT_ROOT))
 
-# --- Import Project Modules (Updated for new, separated utilities) ---
+# --- Import Project Modules ---
 try:
-    from config.params import app_config, AppConfig # Import AppConfig for type hinting
-    from config.paths import PATHS
-    from utils.data_management.market_data_handler import MarketDataHandler # The data processing pipeline
-    from utils.analysis.performance_analyzer import PerformanceAnalyzer # General purpose analyzer for deterministic run
-    from utils.logger_config import setup_rotating_logging # Centralized logging setup
-    from utils.strategy_execution.backtester import Backtester # The modular Backtester
-    from utils.simulation.price_path_simulator import PricePathSimulator # New: Imported utility
-    from utils.analysis.monte_carlo_analyzer import MonteCarloAnalyzer # New: Imported utility
+    from config.params import app_config, AppConfig
+    from config.validator import validate_config
+    from utils.data_management.data_manager import DataManager
+    from utils.strategy_evaluation.performance_analyzer import PerformanceAnalyzer
+    from utils.logger_config import setup_rotating_logging
+    from utils.strategy_execution.backtester import Backtester
+    from utils.strategy_evaluation.price_path_simulator import PricePathSimulator
+    from utils.strategy_evaluation.monte_carlo_analyzer import MonteCarloAnalyzer
 except ImportError as e:
     print(f"ERROR: Failed to import necessary project modules: {e}", file=sys.stderr)
-    print("Please ensure all dependencies are installed (including 'tqdm', 'seaborn', 'arch') and paths are correct.", file=sys.stderr)
+    print("Please ensure all dependencies are installed and paths are correct.", file=sys.stderr)
     sys.exit(1)
+
+
 
 # --- Logger Setup ---
 setup_rotating_logging("mc_backtest")
 logger = logging.getLogger(__name__)
 
+# --- Validate Config ---
+logger.info("Validating application configuration...")
+validate_config(app_config)
+logger.info("Configuration is valid.")
 
-def run_mc_backtest_pipeline(symbol: str, interval: str, model_key: str, backtest_mode: str, train_ratio: float, num_simulations: int):
+
+def run_mc_backtest_pipeline(symbol: str, interval: str, model_type: str, backtest_mode: str, train_ratio: float, num_simulations: int, num_plot_simulations: int):
     """
-    Executes the full Monte Carlo backtesting pipeline.
-
-    Args:
-        symbol (str): The trading pair symbol (e.g., "BTCUSDT").
-        interval (str): The data interval (e.g., "1h").
-        model_key (str): The key for the ML model type to use (e.g., "xgboost").
-        backtest_mode (str): Data split mode ('full', 'train', 'test') for historical data.
-        train_ratio (float): Ratio for train-test split.
-        num_simulations (int): Number of Monte Carlo simulations to run.
+    Executes the full, refactored Monte Carlo backtesting pipeline.
     """
     logger.info(f"\n--- Starting Monte Carlo Backtest Run ---")
-    logger.info(f"Symbol: {symbol}, Interval: {interval}, Model: {model_key}, Mode: {backtest_mode}")
-    logger.info(f"Number of Simulations: {num_simulations}")
+    logger.info(f"Symbol: {symbol}, Interval: {interval}, Model: {model_type}, Mode: {backtest_mode}")
+    logger.info(f"Number of Simulations: {num_simulations}, Number to Plot: {num_plot_simulations}")
+    
+    # --- NEW: Override the number of plot simulations in the config ---
+    app_config.trading.backtest.monte_carlo_plot_simulations = num_plot_simulations
+    
+    data_manager = DataManager()
 
-    # --- 1. Load Full Historical Data for Splitting and GARCH Fitting ---
-    logger.info("📦 Loading full historical data for GARCH fitting and simulation baseline...")
-    # Use MarketDataHandler to load the full historical processed data.
-    # We set backtest_mode to 'full' here to ensure the MarketDataHandler doesn't split it internally
-    # when fetching data for the simulator.
-    temp_mdh = MarketDataHandler(
-        app_config=app_config,
-        mode='backtest',
+    # --- 1. Load Full Historical Data ---
+    logger.info("📦 Loading full historical RAW data...")
+    full_historical_data = data_manager.load_data(
+        data_type='raw',
         symbol=symbol,
-        interval=interval,
-        model_type=model_key,
-        train_ratio=1.0, # Not relevant here, but for MDH init
-        backtest_mode='full' # Ensures full raw data is loaded from disk
+        interval=interval
     )
-    try:
-        # Use the internal _load_data_for_processing method to get the full historical dataset.
-        full_historical_data = temp_mdh._load_data_for_processing()
+    if full_historical_data is None or full_historical_data.empty:
+        logger.critical(f"Historical raw data not found or empty for {symbol} {interval}.")
+        sys.exit(1)
 
-        if full_historical_data is None or full_historical_data.empty:
-            raise FileNotFoundError(f"Historical processed data not found or empty for {symbol} {interval}.")
-        
-        # Ensure data index is DatetimeIndex and has a frequency. This is crucial for pd.date_range.
-        if not isinstance(full_historical_data.index, pd.DatetimeIndex):
-            full_historical_data.index = pd.to_datetime(full_historical_data.index, utc=True)
+    if not isinstance(full_historical_data.index, pd.DatetimeIndex):
+        full_historical_data.index = pd.to_datetime(full_historical_data.index, utc=True)
+    if full_historical_data.index.freq is None:
+        full_historical_data.index.freq = pd.infer_freq(full_historical_data.index)
         if full_historical_data.index.freq is None:
-            inferred_freq = pd.infer_freq(full_historical_data.index)
-            if inferred_freq:
-                full_historical_data.index.freq = inferred_freq
-                logger.info(f"Inferred data frequency: {inferred_freq}")
-            else:
-                logger.warning("Could not infer data frequency. Using 'min' as a fallback. This might cause issues with date_range generation.")
-                full_historical_data.index.freq = 'min' # Fallback to minute frequency
+            logger.critical("Could not infer data frequency. Cannot proceed with simulation.")
+            sys.exit(1)
+        logger.info(f"Inferred data frequency: {full_historical_data.index.freq}")
 
-    except Exception as e:
-        logger.critical(f"Data loading failed for Monte Carlo pipeline: {e}", exc_info=True)
-        sys.exit(1)
-
-    # --- 2. Determine Data Segments for GARCH Fitting and Simulation Baseline ---
+    # --- 2. Determine Data Segments ---
     garch_fitting_data: pd.DataFrame
-    simulation_baseline_data: pd.DataFrame # This defines length and start date for simulations and deterministic baseline
+    simulation_baseline_data: pd.DataFrame
 
+    split_index = int(len(full_historical_data) * train_ratio)
+    
     if backtest_mode == 'test':
-        train_size = int(len(full_historical_data) * train_ratio)
-        if train_size == 0:
-            logger.critical("Train size is 0 for 'test' mode. Cannot fit GARCH model. Adjust train_ratio or data.")
-            sys.exit(1)
-        if len(full_historical_data) - train_size == 0:
-             logger.critical("Test size is 0 for 'test' mode. Cannot run simulations. Adjust train_ratio or data.")
-             sys.exit(1)
-
-        train_data = full_historical_data.iloc[:train_size]
-        test_data = full_historical_data.iloc[train_size:]
-
-        garch_fitting_data = train_data # GARCH fitted on train_data for realistic backtesting
-        simulation_baseline_data = test_data # Simulations and deterministic baseline run on test_data
+        garch_fitting_data = full_historical_data.iloc[:split_index]
+        simulation_baseline_data = full_historical_data.iloc[split_index:]
         logger.info(f"Mode 'test': GARCH fitted on {len(garch_fitting_data)} train bars. Simulations/Baseline on {len(simulation_baseline_data)} test bars.")
-
     elif backtest_mode == 'train':
-        train_size = int(len(full_historical_data) * train_ratio)
-        if train_size == 0:
-            logger.critical("Train size is 0 for 'train' mode. Cannot run simulations or baseline. Adjust train_ratio or data.")
-            sys.exit(1)
-
-        train_data = full_historical_data.iloc[:train_size]
-        
-        garch_fitting_data = full_historical_data # GARCH fitted on full_historical_data for stress testing
-        simulation_baseline_data = train_data # Simulations and deterministic baseline run on train_data
+        garch_fitting_data = full_historical_data
+        simulation_baseline_data = full_historical_data.iloc[:split_index]
         logger.info(f"Mode 'train': GARCH fitted on {len(garch_fitting_data)} full bars. Simulations/Baseline on {len(simulation_baseline_data)} train bars.")
-
-    elif backtest_mode == 'full':
-        garch_fitting_data = full_historical_data # GARCH fitted on full_historical_data for stress testing
-        simulation_baseline_data = full_historical_data # Simulations and deterministic baseline run on full_historical_data
+    else: # 'full' mode
+        garch_fitting_data = full_historical_data
+        simulation_baseline_data = full_historical_data
         logger.info(f"Mode 'full': GARCH fitted on {len(garch_fitting_data)} full bars. Simulations/Baseline on {len(simulation_baseline_data)} full bars.")
-    else:
-        logger.critical(f"Invalid backtest_mode: {backtest_mode}. Exiting.")
-        sys.exit(1)
 
-    if simulation_baseline_data.empty:
-        logger.critical("Simulation baseline data is empty. Cannot run Monte Carlo simulations or deterministic backtest. Exiting.")
+    if simulation_baseline_data.empty or garch_fitting_data.empty:
+        logger.critical("Data splitting resulted in an empty dataframe for GARCH fitting or simulation. Exiting.")
         sys.exit(1)
 
     # --- 3. Run Deterministic Backtest for Baseline ---
     logger.info("--- Running Deterministic Backtest for Baseline ---")
     deterministic_results = {}
     try:
-        # Pass the specific 'simulation_baseline_data' to the Backtester
         det_backtester = Backtester(
             app_config=app_config,
             symbol=symbol,
             interval=interval,
-            model_type=model_key,
-            backtest_mode='full', # Treat this specific data as 'full' for the Backtester
-            initial_ohlcv_data=simulation_baseline_data # Inject the baseline data
+            model_type=model_type,
+            backtest_mode='full',
+            initial_ohlcv_data=simulation_baseline_data.copy()
         )
-        # Run the backtest and capture the results (returns PerformanceAnalyzer now)
-        det_trades, det_equity, det_performance_analyzer = det_backtester.run_backtest()
-        det_metrics = det_performance_analyzer.calculate_summary_metrics()
+        det_trades, det_equity = det_backtester.run_backtest()
+        
+        if det_trades.empty or det_equity.empty:
+            logger.critical("Deterministic backtest produced no trades or an empty equity curve. Cannot establish a valid baseline. Aborting.")
+            sys.exit(1)
+
+        det_analyzer = PerformanceAnalyzer(
+            app_config=app_config,
+            trade_history_df=det_trades,
+            equity_df=det_equity,
+            symbol=symbol,
+            interval=interval,
+            model_type=model_type
+        )
+        det_metrics, _ = det_analyzer.generate_analysis_artifacts()
         
         deterministic_results = {
-            'trades': det_trades,
-            'equity_curve': det_equity,
             'metrics': det_metrics,
-            'ohlcv_data': simulation_baseline_data.copy(), # Store the actual OHLCV used for baseline
-            'config_symbol': symbol,
-            'config_interval': interval,
-            'initial_capital': app_config.trading.risk.initial_capital # Explicitly pass initial capital
+            'equity_curve': det_equity,
+            'ohlcv_data': simulation_baseline_data.copy()
         }
         logger.info("Deterministic backtest complete. Results stored for comparison.")
     except Exception as e:
-        logger.critical(f"Deterministic backtest failed, cannot proceed with Monte Carlo: {e}", exc_info=True)
+        logger.critical(f"Deterministic backtest failed: {e}", exc_info=True)
         sys.exit(1)
 
-    # --- 4. Initialize PricePathSimulator (GARCH + Jumps) ---
-    if garch_fitting_data.empty or len(garch_fitting_data) < 2: # Need at least 2 bars for pct_change for GARCH fitting
-        logger.critical("GARCH fitting data is too short or empty for PricePathSimulator. Exiting.")
-        sys.exit(1)
-
-    simulator = PricePathSimulator(garch_fitting_data, app_config) # Pass the determined GARCH fitting data
-    logger.info(f"PricePathSimulator initialized for GARCH + Jumps simulation, fitted on {len(garch_fitting_data)} bars.")
-
+    # --- 4. Initialize PricePathSimulator ---
+    simulator = PricePathSimulator(garch_fitting_data, app_config)
+    logger.info(f"PricePathSimulator initialized, fitted on {len(garch_fitting_data)} bars.")
 
     # --- 5. Run Monte Carlo Simulation Loop ---
     all_metrics: List[Dict[str, Any]] = []
     all_equity_curves: List[pd.Series] = []
-    all_simulated_paths: List[pd.DataFrame] = [] # To store the raw synthetic OHLCV paths
+    all_simulated_paths: List[pd.DataFrame] = []
     logger.info(f"--- Starting {num_simulations} Monte Carlo Simulations ---")
     
     for i in tqdm(range(num_simulations), desc="Running Backtest Simulations"):
-        sim_summary_metrics: Dict[str, Any] = {}
-        sim_equity_curve = pd.Series(dtype=float) # Initialize as empty Series
-
         try:
-            # Generate one synthetic raw OHLCV data path for this simulation
-            # The length of this path matches the determined simulation_baseline_data length
             synthetic_ohlcv_df = simulator.simulate_one_path(
                 num_periods=len(simulation_baseline_data),
-                start_date=simulation_baseline_data.index[0], # Start date matches the baseline data
-                freq=simulation_baseline_data.index.freq # Frequency matches the baseline data
+                start_date=simulation_baseline_data.index[0],
+                freq=simulation_baseline_data.index.freq
             )
-
-            if synthetic_ohlcv_df is None or synthetic_ohlcv_df.empty:
-                logger.warning(f"Simulation {i+1}: Generated empty synthetic OHLCV data. Skipping this simulation.")
-                sim_summary_metrics['error'] = 'Empty synthetic OHLCV data'
-                all_metrics.append(sim_summary_metrics)
-                all_equity_curves.append(sim_equity_curve)
-                all_simulated_paths.append(pd.DataFrame()) # Append an empty path on failure
+            if synthetic_ohlcv_df is None:
+                logger.warning(f"Simulation {i+1}: Simulator returned None. Skipping.")
                 continue
             
-            all_simulated_paths.append(synthetic_ohlcv_df.copy()) # Store the generated raw path
+            all_simulated_paths.append(synthetic_ohlcv_df.copy())
 
-            # Initialize a fresh Backtester instance for each simulation.
-            # Crucially, pass the `synthetic_ohlcv_df` directly to the Backtester's `initial_ohlcv_data` parameter.
-            # This ensures the Backtester processes our in-memory synthetic data.
             sim_backtester = Backtester(
                 app_config=app_config,
                 symbol=symbol,
                 interval=interval,
-                model_type=model_key,
-                backtest_mode='full', # Treat synthetic data as a 'full' dataset for the Backtester itself
-                initial_ohlcv_data=synthetic_ohlcv_df # Pass the synthetic data here!
+                model_type=model_type,
+                backtest_mode='full',
+                initial_ohlcv_data=synthetic_ohlcv_df
             )
-            # The MarketDataHandler inside sim_backtester will now use this initial_ohlcv_data.
-            # No need to manually override get_processed_data_stream anymore.
+            sim_trades, sim_equity = sim_backtester.run_backtest()
 
-            # Run the backtest on the synthetic data and capture its results
-            sim_trades, sim_equity_curve, sim_performance_analyzer = sim_backtester.run_backtest()
-            sim_metrics = sim_performance_analyzer.calculate_summary_metrics()
-            sim_summary_metrics.update(sim_metrics)
-            all_metrics.append(sim_summary_metrics)
-            all_equity_curves.append(sim_equity_curve)
+            sim_equity_series = sim_equity['equity'] if isinstance(sim_equity, pd.DataFrame) and 'equity' in sim_equity else pd.Series(dtype=float, name='equity')
+
+            sim_analyzer = PerformanceAnalyzer(
+                app_config=app_config,
+                trade_history_df=sim_trades,
+                equity_df=sim_equity,
+                symbol=symbol,
+                interval=interval,
+                model_type=model_type
+            )
+            sim_metrics, _ = sim_analyzer.generate_analysis_artifacts()
+            
+            all_metrics.append(sim_metrics)
+            all_equity_curves.append(sim_equity_series)
 
         except Exception as e:
-            logger.error(f"Backtest on simulation {i+1} failed: {e}", exc_info=False) # Log without full traceback unless debug needed
-            sim_summary_metrics['error'] = str(e) # Record the error in metrics
-            all_metrics.append(sim_summary_metrics)
-            all_equity_curves.append(sim_equity_curve) # Append current (potentially empty/partial) equity curve
-            all_simulated_paths.append(pd.DataFrame()) # Append empty path if error occurs
-
+            logger.error(f"Backtest on simulation {i+1} failed: {e}", exc_info=False)
+            all_metrics.append({'error': str(e)})
+            all_equity_curves.append(pd.Series(dtype=float, name='equity'))
+            all_simulated_paths.append(pd.DataFrame())
 
     # --- 6. Aggregate and Analyze Results ---
     if not all_metrics:
         logger.error("No simulations were successfully completed. Cannot perform aggregate analysis. Exiting.")
         return
 
-    # Define a safe and organized output directory for Monte Carlo analysis results
-    # Ensure this path is distinct from standard backtest analysis results
-    base_analysis_dir = Path(PATHS.get("analysis_dir"))
-    output_dir = base_analysis_dir / "monte_carlo" / model_key / f"{symbol.replace('/', '_')}_{interval}"
-    output_dir = output_dir / f"mode_{backtest_mode}_ratio_{str(train_ratio).replace('.', '')}_sims_{num_simulations}"
-    
-    # Instantiate MonteCarloAnalyzer and run its full analysis pipeline
-    analyzer = MonteCarloAnalyzer(
+    logger.info("Aggregating results with MonteCarloAnalyzer...")
+    mc_analyzer = MonteCarloAnalyzer(
+        app_config=app_config,
         metrics_df=pd.DataFrame(all_metrics),
         all_equity_curves=all_equity_curves,
         deterministic_results=deterministic_results,
-        output_dir=output_dir, # Pass the specific output directory
-        all_simulated_paths=all_simulated_paths,
-        app_config=app_config # Pass app_config to the analyzer
+        all_simulated_paths=all_simulated_paths
     )
-    analyzer.run_full_analysis()
+    summary_tables, plots_dict = mc_analyzer.generate_analysis_artifacts()
+    logger.info("Analysis complete. Summary tables and plot figures generated.")
+
+    # --- 7. Save All Artifacts ---
+    logger.info("Saving all Monte Carlo artifacts...")
+    data_manager.save_monte_carlo_artifacts(
+        model_type=model_type,
+        symbol=symbol,
+        interval=interval,
+        mode=backtest_mode,
+        num_simulations=num_simulations,
+        summary_tables=summary_tables,
+        plots_dict=plots_dict,
+        app_config=app_config
+    )
+    logger.info("All artifacts saved successfully to the Monte Carlo run directory.")
 
 
 if __name__ == "__main__":
-    # Argument parser for command-line execution
     parser = argparse.ArgumentParser(description="Run advanced Monte Carlo backtests on a trained model.")
     parser.add_argument('--symbol', type=str, required=True, help='Trading pair symbol (e.g., BTCUSDT)')
-    parser.add_argument('--interval', type=str, required=True, choices=['1m', '5m', '15m', '30m', '1h', '2h', '4h', '6h', '8h', '12h', '1d', '3d', '1w', '1M'], help='Time interval (e.g., 1h, 1d)')
+    parser.add_argument('--interval', type=str, required=True, help='Time interval (e.g., 1h, 1d)')
     parser.add_argument('--model', type=str, required=True, choices=list(app_config.model.AVAILABLE_MODEL_TYPES.keys()), help='Model key from app_config.model')
     parser.add_argument('--backtest_mode', type=str, default='test', choices=['full', 'train', 'test'], help='Data split to use for GARCH fitting and simulation length.')
     parser.add_argument('--train_ratio', type=float, default=app_config.model.train_test_split_ratio, help='Train/test split ratio.')
     parser.add_argument('--num_simulations', type=int, default=100, help='Number of Monte Carlo simulations to run.')
+    # --- NEW: Argument to control the number of plotted simulations ---
+    parser.add_argument('--num_plot_simulations', type=int, default=app_config.trading.backtest.monte_carlo_plot_simulations, 
+                        help='Number of simulation paths to display on plots.')
     
     args = parser.parse_args()
 
@@ -306,13 +263,14 @@ if __name__ == "__main__":
         run_mc_backtest_pipeline(
             symbol=args.symbol.upper(),
             interval=args.interval,
-            model_key=args.model,
+            model_type=args.model,
             backtest_mode=args.backtest_mode,
             train_ratio=args.train_ratio,
-            num_simulations=args.num_simulations
+            num_simulations=args.num_simulations,
+            num_plot_simulations=args.num_plot_simulations # Pass the new argument
         )
     except Exception as e:
         logger.critical(f"Unhandled exception in pipeline: {e}", exc_info=True)
     finally:
-        # Ensure all log handlers are properly closed on script exit
         logging.shutdown()
+        logger.info("\n--- Monte Carlo Backtest Script Finished ---")

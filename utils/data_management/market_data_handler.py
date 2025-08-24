@@ -217,13 +217,7 @@ class MarketDataHandler:
         self.logger.debug(f"Fetching latest data for {self.symbol} {self.interval}...")
         try:
             # Determine required lookback for features and LSTM
-            # FIXED: Use feature_engineer.required_lookback property
-            required_lookback = self.feature_engineer.required_lookback + \
-                                (self.model_config.lstm_params.sequence_length_bars if self.model_config.model_type == 'lstm' else 0)
-
-            # Add a buffer and enforce minimum lookback
-            required_lookback = max(required_lookback, self.general_config.min_historical_data_lookback)
-            required_lookback += 5 # Buffer for robust feature calculation
+            required_lookback = self.config.general.historical_data_lookback
             self.logger.info(f"Required lookback for {self.symbol} {self.interval}: {required_lookback} bars.")
 
             raw_ohlcv_df = await exchange_adapter.fetch_recent_candles(

@@ -1,4 +1,5 @@
 # utils/data_manager.py
+import datetime
 import pandas as pd
 import numpy as np
 from pathlib import Path
@@ -9,12 +10,14 @@ import sys # Import sys for checking modules
 from typing import Optional, Any, Dict, Union # Import Dict and Union
 from matplotlib.figure import Figure
 import json # Import json for metadata and evaluation results
+import dataclasses # Import dataclasses for the helper function
 
 # Set up logging for the data manager
 logger = logging.getLogger(__name__)
 
 # Import paths configuration
 try:
+    from config.params import AppConfig
     from config.paths import PATHS, PATH_CONFIG
 except ImportError:
     # Define a basic fallback if paths.py is missing
@@ -43,6 +46,25 @@ except Exception as e:
     logger.error(f"Error importing TensorFlow/Keras in DataManager: {e}", exc_info=True)
     tf = None
     TF_AVAILABLE = False
+    
+def _dataclass_to_dict(obj: Any) -> Any:
+    """
+    Recursively converts a dataclass object to a dictionary, ready for YAML/JSON serialization.
+    Handles nested dataclasses, lists of dataclasses, and dicts of dataclasses.
+    """
+    if dataclasses.is_dataclass(obj):
+        # For dataclasses, convert to dict and recurse on values
+        return {f.name: _dataclass_to_dict(getattr(obj, f.name)) for f in dataclasses.fields(obj)}
+    elif isinstance(obj, list):
+        # For lists, recurse on each item
+        return [_dataclass_to_dict(v) for v in obj]
+    elif isinstance(obj, dict):
+        # For dicts, recurse on each value
+        return {k: _dataclass_to_dict(v) for k, v in obj.items()}
+    else:
+        # For all other types (int, str, float, bool, etc.), return as is
+        return obj
+
 
 
 class DataManager:
@@ -138,13 +160,18 @@ class DataManager:
         """Gets the unique directory for a specific backtesting run."""
         return self._get_run_dir('backtesting', 'backtesting_run_dir', model_type=model_type, symbol=symbol, interval=interval)
 
-    def get_monte_carlo_dir(self, model_type: str, symbol: str, interval: str, timestamp: str, mode: str, num_simulations: int) -> Path:
-        """Gets the unique, timestamped directory for a Monte Carlo analysis run."""
+    def get_monte_carlo_dir(self, model_type: str, symbol: str, interval: str, mode: str, num_simulations: int) -> Path:
+        """Gets the unique directory for a Monte Carlo analysis run."""
+        # FIXED: Removed timestamp from arguments as it's no longer used in the path pattern
         return self._get_run_dir(
             'monte_carlo', 'monte_carlo_run_dir',
             model_type=model_type, symbol=symbol, interval=interval,
-            timestamp=timestamp, mode=mode, num_simulations=num_simulations
+            mode=mode, num_simulations=num_simulations
         )
+
+    def get_live_trading_dir(self, model_type: str, symbol: str, interval: str) -> Path:
+        """Gets the unique directory for a specific live trading run."""
+        return self._get_run_dir('live_trading', 'live_trading_run_dir', model_type=model_type, symbol=symbol, interval=interval)
 
     def save_dataframe(self, df: pd.DataFrame, data_type: str, **kwargs):
         """Saves a DataFrame (e.g., raw, processed, labeled) to a parquet file."""
@@ -188,14 +215,153 @@ class DataManager:
         """Saves all artifacts from a single backtest run to its dedicated directory."""
         run_dir = self.get_backtesting_dir(model_type, symbol, interval)
         self.logger.info(f"Saving backtest results to directory: {run_dir}")
-        trades_df.to_parquet(run_dir / self.path_config['patterns']['backtest_trades'])
+        
+        # Create a copy to avoid modifying the original DataFrame in memory
+        trades_to_save = trades_df.copy()
+
+        # FIX: Convert model_probabilities column to JSON string before saving
+        if 'model_probabilities' in trades_to_save.columns:
+            self.logger.info("Converting 'model_probabilities' column to JSON strings for Parquet compatibility.")
+            # Use a safe conversion that handles dicts, NaNs, and other types
+            trades_to_save['model_probabilities'] = trades_to_save['model_probabilities'].apply(
+                lambda x: json.dumps(x) if isinstance(x, dict) else x
+            )
+
+        trades_to_save.to_parquet(run_dir / self.path_config['patterns']['backtest_trades'])
         equity_df.to_parquet(run_dir / self.path_config['patterns']['backtest_equity'])
+        
         sanitized_metrics = self._sanitize_for_json(metrics)
         with open(run_dir / self.path_config['patterns']['backtest_metrics_json'], 'w') as f:
             json.dump(sanitized_metrics, f, indent=4)
         pd.DataFrame([sanitized_metrics]).to_csv(run_dir / self.path_config['patterns']['backtest_metrics_csv'], index=False)
         self.logger.info("Saved trades, equity, and metrics for backtest run.")
 
+    def save_backtest_artifacts(self, model_type: str, symbol: str, interval: str, trades_df: pd.DataFrame,
+                                equity_df: pd.DataFrame, metrics_dict: Dict, plots_dict: Dict, app_config: AppConfig):
+        """
+        Saves all artifacts from a single backtest run, including plots and config.
+        This is the new orchestrator-friendly method.
+        """
+        run_dir = self.get_backtesting_dir(model_type, symbol, interval)
+        self.logger.info(f"Saving all backtest artifacts to directory: {run_dir}")
+
+        # 1. Save core results (trades, equity, metrics) using existing method
+        self.save_backtest_results(trades_df, equity_df, metrics_dict, model_type, symbol, interval)
+
+        # 2. Save Plots
+        plots_dir = run_dir / "plots"
+        plots_dir.mkdir(exist_ok=True)
+        for plot_name, fig in plots_dict.items():
+            try:
+                # Using a generic plot pattern key from paths.py
+                self.save_analysis_plot(fig, plots_dir, "backtest_plot", plot_type=plot_name)
+            except Exception as e:
+                self.logger.error(f"Failed to save plot '{plot_name}': {e}", exc_info=True)
+            finally:
+                # Ensure figure is closed to free memory, even if saving fails
+                import matplotlib.pyplot as plt
+                plt.close(fig)
+
+        # 3. Save Config for reproducibility
+        try:
+            import yaml
+            # FIXED: Use the new robust helper function instead of dataclasses.asdict
+            config_dict = _dataclass_to_dict(app_config)
+            config_path = run_dir / "config_used.yaml"
+            with open(config_path, 'w') as f:
+                yaml.dump(config_dict, f, default_flow_style=False, sort_keys=False)
+            self.logger.info(f"Saved run configuration to {config_path}")
+        except ImportError:
+            self.logger.warning("`PyYAML` is not installed. Skipping config save. To install: pip install PyYAML")
+        except Exception as e:
+            self.logger.error(f"Failed to save config.yaml: {e}", exc_info=True)
+
+    def save_monte_carlo_artifacts(self, model_type: str, symbol: str, interval: str, mode: str, num_simulations: int,
+                                   summary_tables: Dict[str, pd.DataFrame], plots_dict: Dict[str, Figure], app_config: AppConfig):
+        """
+        Saves all artifacts from a Monte Carlo analysis run to a unique directory.
+        """
+        # FIXED: Removed timestamp generation as it's no longer used in the path.
+        run_dir = self.get_monte_carlo_dir(model_type, symbol, interval, mode, num_simulations)
+        self.logger.info(f"Saving all Monte Carlo artifacts to directory: {run_dir}")
+
+        # 1. Save summary tables
+        table_pattern_map = {
+            'all_simulation_metrics': 'mc_raw_metrics',
+            'summary_stats': 'mc_summary_stats'
+        }
+        for table_name, df in summary_tables.items():
+            if not df.empty:
+                pattern_key = table_pattern_map.get(table_name)
+                if pattern_key:
+                    self.save_analysis_table(df, run_dir, pattern_key)
+                else:
+                    self.logger.warning(f"No pattern defined for saving table '{table_name}'. Skipping.")
+
+        # 2. Save Plots
+        plots_dir = run_dir / "plots"
+        plots_dir.mkdir(exist_ok=True)
+        for plot_name, fig in plots_dict.items():
+            try:
+                self.save_analysis_plot(fig, plots_dir, "mc_plot", plot_type=plot_name)
+            except Exception as e:
+                self.logger.error(f"Failed to save plot '{plot_name}': {e}", exc_info=True)
+            finally:
+                import matplotlib.pyplot as plt
+                plt.close(fig)
+
+        # 3. Save Config for reproducibility
+        try:
+            import yaml
+            config_dict = _dataclass_to_dict(app_config)
+            config_path = run_dir / "config_used.yaml"
+            with open(config_path, 'w') as f:
+                yaml.dump(config_dict, f, default_flow_style=False, sort_keys=False)
+            self.logger.info(f"Saved run configuration to {config_path}")
+        except ImportError:
+            self.logger.warning("`PyYAML` is not installed. Skipping config save. To install: pip install PyYAML")
+        except Exception as e:
+            self.logger.error(f"Failed to save config.yaml: {e}", exc_info=True)
+
+    def save_bot_state(self, state: Dict[str, Any], model_type: str, symbol: str, interval: str):
+        """Saves the bot's current state (capital, open positions) to a JSON file."""
+        run_dir = self.get_live_trading_dir(model_type, symbol, interval)
+        filename = self.path_config['patterns']['live_trading_state']
+        file_path = run_dir / filename
+        self.logger.info(f"Saving bot state to: {file_path}")
+        try:
+            file_path.parent.mkdir(parents=True, exist_ok=True)
+            sanitized_state = self._sanitize_for_json(state)
+            with open(file_path, 'w') as f:
+                json.dump(sanitized_state, f, indent=4)
+            self.logger.info("Successfully saved bot state.")
+        except Exception as e:
+            self.logger.error(f"Failed to save bot state to {file_path}: {e}", exc_info=True)
+            raise OSError(f"Failed to save bot state to {file_path}: {e}")
+
+    def load_bot_state(self, model_type: str, symbol: str, interval: str) -> Optional[Dict[str, Any]]:
+        """Loads the bot's state from a JSON file."""
+        run_dir = self.get_live_trading_dir(model_type, symbol, interval)
+        filename = self.path_config['patterns']['live_trading_state']
+        file_path = run_dir / filename
+        
+        if not file_path.exists():
+            self.logger.warning(f"Bot state file not found at: {file_path}. Will start with initial capital.")
+            return None
+        
+        self.logger.info(f"Loading bot state from: {file_path}")
+        try:
+            with open(file_path, 'r') as f:
+                state = json.load(f)
+            self.logger.info("Successfully loaded bot state.")
+            return state
+        except json.JSONDecodeError as e:
+            self.logger.error(f"Failed to decode JSON from state file {file_path}: {e}", exc_info=True)
+            return None
+        except Exception as e:
+            self.logger.error(f"Failed to load bot state from {file_path}: {e}", exc_info=True)
+            return None
+            
     def _sanitize_for_json(self, data: Any) -> Any:
         if isinstance(data, dict): return {k: self._sanitize_for_json(v) for k, v in data.items()}
         if isinstance(data, list): return [self._sanitize_for_json(i) for i in data]

@@ -1,38 +1,40 @@
-# Core Data Handling and Analysis
-pandas>=2.2.0 # Latest stable is 2.2.2 (as of May 2025)
-numpy>=1.26.0 # Latest stable is 1.26.4 (as of May 2025)
-pyarrow>=15.0.0 # Latest stable is 15.0.2 (as of May 2025)
-scipy>=1.12.0 # Latest stable is 1.13.0 (as of May 2025)
-tzdata>=2024.1 # Latest stable is 2024.1 (as of May 2025)
+# Core Data Handling & Analysis
+pandas>=2.2.0
+numpy>=1.26.0
+scipy>=1.12.0
+pyarrow>=15.0.0 # For efficient Parquet file handling
+tqdm # For progress bars
+
+# Configuration & Utilities
+python-dotenv>=1.0.0 # For managing environment variables
+pyyaml>=6.0 # For saving configuration files (e.g., in backtest results)
 
 # Technical Analysis Libraries
-TA-Lib # Python TA library (NOTE: Requires TA-Lib C library to be installed separately. See https://www.ta-lib.org/hdr_dw.html for instructions.)
+# NOTE: The 'TA-Lib' wrapper requires the underlying TA-Lib C library to be installed.
+# The .whl file below is a pre-compiled version for a specific Python version on Windows.
+TA-Lib
 ta_lib-0.6.3-cp312-cp312-win_amd64.whl 
-ta>=0.11.0 # Latest stable is 0.11.0 (as of May 2025)
+ta>=0.11.0
+arch # For ARCH/GARCH volatility models
 
-# Machine Learning Models
-scikit-learn>=1.4.0 # Latest stable is 1.4.2 (as of May 2025)
-xgboost>=2.0.0 # Latest stable is 2.0.3 (as of May 2025)
-imbalanced-learn>=0.12.0 # Latest stable is 0.12.2 (as of May 2025)
-tensorflow>=2.16.0 # Latest stable is 2.16.1 (as of May 2025)
+# Machine Learning & Deep Learning
+scikit-learn>=1.4.0
+xgboost>=2.0.0
+imbalanced-learn>=0.12.0
+tensorflow>=2.16.0
 
 # Data Visualization
-matplotlib>=3.8.0 # Latest stable is 3.8.4 (as of May 2025)
-seaborn>=0.13.0 # Latest stable is 0.13.2 (as of May 2025)
+matplotlib>=3.8.0
+seaborn>=0.13.0
+mplfinance>=0.12.9b7
 
-# Exchange Interaction (Binance Futures Adapter)
-python-binance>=1.0.19 # Latest stable is 1.0.19 (as of May 2025)
-python-dotenv>=1.0.0 # Latest stable is 1.0.1 (as of May 2025)
-requests>=2.31.0 # Latest stable is 2.31.0 (as of May 2025)
+# Exchange Interaction & API
+python-binance>=1.0.19
+requests>=2.31.0
 
 # Notifications
-python-telegram-bot>=20.0 # Latest stable is 20.8 (as of May 2025)
+python-telegram-bot>=20.0
 
-# Logging
-# No specific logging library needed beyond built-in, but ensure proper configuration
-
-# For development/testing
-pytest>=8.0.0 # Latest stable is 8.2.0 (as of May 2025)
-
-arch
-tqdm
+# Development & Testing
+pytest>=8.0.0
+tzdata>=2024.1 # For timezone-aware datetime objects

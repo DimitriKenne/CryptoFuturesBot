@@ -22,7 +22,7 @@ class MetricsCalculator:
         # This will be set by the calling analyzer, or defaulted
         # It's not determined in init because interval is not always known here
 
-    def calculate_all_metrics(self, trade_history_df: pd.DataFrame, equity_df: pd.DataFrame, symbol: str, interval: str) -> Dict[str, Any]:
+    def calculate_all_metrics(self, trade_history_df: pd.DataFrame, equity_df: pd.DataFrame, interval: str) -> Dict[str, Any]:
         """
         Calculates a comprehensive set of performance metrics.
         """
