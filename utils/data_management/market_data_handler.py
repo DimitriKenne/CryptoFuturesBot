@@ -70,10 +70,10 @@ class MarketDataHandler:
         """Loads and splits historical data based on backtest mode."""
         self.logger.info(f"Loading historical data for {self.symbol} {self.interval} ({self.model_type}, mode: {self.backtest_mode})")
 
-        full_data = self.data_manager.load_data(
+        full_data = self.data_manager.load_dataframe(
+            data_type='raw',
             symbol=self.symbol,
-            interval=self.interval,
-            data_type='raw'
+            interval=self.interval
         )
 
         if full_data is None or full_data.empty:
@@ -217,7 +217,7 @@ class MarketDataHandler:
         self.logger.debug(f"Fetching latest data for {self.symbol} {self.interval}...")
         try:
             # Determine required lookback for features and LSTM
-            required_lookback = self.config.general.historical_data_lookback
+            required_lookback = self.general_config.historical_data_lookback
             self.logger.info(f"Required lookback for {self.symbol} {self.interval}: {required_lookback} bars.")
 
             raw_ohlcv_df = await exchange_adapter.fetch_recent_candles(
@@ -260,19 +260,20 @@ class MarketDataHandler:
                     raise RuntimeError("Could not determine model features. Cannot proceed with live prediction.")
 
             # Prepare data for model inference based on model type
-            if self.model_config.model_type == 'lstm':
+            if self.model_type == 'lstm':
                 sequence_length = self.model_config.lstm_params.sequence_length_bars
-                if len(featured_data) < sequence_length:
-                    self.logger.warning(f"Not enough data ({len(featured_data)}) for LSTM sequence length {sequence_length}. Skipping prediction.")
-                    return None
                 model_input_data = featured_data[model_feature_cols].iloc[-sequence_length:].copy()
+                model_input_data.dropna(inplace=True)
+                # Defensive: Check again after NaN removal
+                if model_input_data.empty or len(model_input_data) < sequence_length:
+                    self.logger.warning(f"Model input data empty or insufficient ({len(model_input_data)}) for LSTM sequence length {sequence_length}. Skipping prediction.")
+                    return None
             else:
                 model_input_data = featured_data[model_feature_cols].iloc[[-1]].copy()
-
-            model_input_data.dropna(inplace=True)
-            if model_input_data.empty:
-                self.logger.warning("Model input data empty after cleaning. Cannot generate live signal.")
-                return None
+                model_input_data.dropna(inplace=True)
+                if model_input_data.empty:
+                    self.logger.warning("Model input data empty after cleaning. Cannot generate live signal.")
+                    return None
 
             live_signal = self.model_trainer.predict(model_input_data).iloc[-1]
             live_probabilities_raw = self.model_trainer.predict_proba(model_input_data)
@@ -309,7 +310,7 @@ class MarketDataHandler:
 
             latest_processed_bar = featured_data.loc[[latest_completed_candle_timestamp]].copy()
             latest_processed_bar['signal'] = int(live_signal)
-            latest_processed_bar['probabilities'] = live_probabilities_dict
+            latest_processed_bar['probabilities'] = [live_probabilities_dict]
 
             self.logger.debug(f"Processed new live candle at {latest_completed_candle_timestamp}. Signal: {int(live_signal)}")
 

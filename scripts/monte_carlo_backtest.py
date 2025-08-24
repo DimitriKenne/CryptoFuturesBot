@@ -81,7 +81,7 @@ def run_mc_backtest_pipeline(symbol: str, interval: str, model_type: str, backte
 
     # --- 1. Load Full Historical Data ---
     logger.info("📦 Loading full historical RAW data...")
-    full_historical_data = data_manager.load_data(
+    full_historical_data = data_manager.load_dataframe(
         data_type='raw',
         symbol=symbol,
         interval=interval

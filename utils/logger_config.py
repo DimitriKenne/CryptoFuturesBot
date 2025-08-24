@@ -14,20 +14,20 @@ sys.path.append(str(PROJECT_ROOT))
 
 # Import paths configuration
 try:
-    from config.paths import PATHS
+    from config.paths import LOGS_DIR 
 except ImportError:
     # Define a default log path if config.paths is not available
     DEFAULT_LOG_DIR = PROJECT_ROOT / "logs"
-    PATHS = {'logs_dir': DEFAULT_LOG_DIR}
+    LOGS_DIR = DEFAULT_LOG_DIR
     # Ensure the default log directory exists
     try:
-        PATHS['logs_dir'].mkdir(parents=True, exist_ok=True)
+        LOGS_DIR.mkdir(parents=True, exist_ok=True)
     except OSError as e:
         # If even default log dir creation fails, use current directory
-        PATHS['logs_dir'] = Path(".")
+        LOGS_DIR = Path(".")
         print(f"Warning: Could not create default log directory {DEFAULT_LOG_DIR}: {e}. Logging to current directory.", file=sys.stderr)
 
-    print(f"Warning: config.paths not found. Using default log directory: {PATHS['logs_dir']}", file=sys.stderr)
+    print(f"Warning: config.paths not found. Using default log directory: {LOGS_DIR}", file=sys.stderr)
 
 
 # Get a logger instance for internal messages within logger_config itself
@@ -93,7 +93,7 @@ def setup_rotating_logging(log_filename_base: str, log_level=logging.INFO, max_b
 
 
     # --- Rotating File Handler ---
-    log_dir = PATHS.get('logs_dir', PROJECT_ROOT / "logs") # Use default if not in PATHS
+    log_dir = LOGS_DIR
     # Ensure log directory exists
     log_dir_path = Path(log_dir)
     try:

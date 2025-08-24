@@ -1,5 +1,4 @@
-# utils/bot_management/trade_cycle_processor.py
-
+import asyncio
 import logging
 from typing import Dict, Any, Optional
 from datetime import datetime
@@ -11,7 +10,7 @@ from utils.strategy_execution.live_trading_session_manager import LiveTradingSes
 from utils.strategy_execution.trade_execution_engine import TradeExecutionEngine
 from utils.data_management.market_data_handler import MarketDataHandler
 from utils.exceptions import ExchangeConnectionError, OrderExecutionError
-from utils.notification_manager import NotificationManager  # <-- ADDED IMPORT
+from utils.notification_manager import NotificationManager
 
 logger = logging.getLogger(__name__)
 
@@ -20,14 +19,14 @@ class TradeCycleProcessor:
 
     def __init__(self, data_manager: DataManager, market_data_handler: MarketDataHandler, 
                  exchange_adapter: ExchangeInterface, session_manager: LiveTradingSessionManager, 
-                 trade_execution_engine: TradeExecutionEngine, notifier: NotificationManager, # <-- ADDED notifier
+                 trade_execution_engine: TradeExecutionEngine, notifier: NotificationManager,
                  model_type: str, symbol: str, interval: str):
         self.data_manager = data_manager
         self.market_data_handler = market_data_handler
         self.exchange_adapter = exchange_adapter
         self.session_manager = session_manager
         self.trade_execution_engine = trade_execution_engine
-        self.notifier = notifier  # <-- ADDED notifier
+        self.notifier = notifier
         self.model_type = model_type
         self.symbol = symbol
         self.interval = interval
@@ -43,7 +42,6 @@ class TradeCycleProcessor:
         latest_candle_data = await self.market_data_handler.get_latest_data(
             self.exchange_adapter, self.last_processed_timestamp
         )
-
         if latest_candle_data is None:
             return
 
@@ -83,7 +81,7 @@ class TradeCycleProcessor:
             
             self.session_manager.close_position(finalized_trade)
             
-            # --- ADDED NOTIFICATION ---
+            # --- NOTIFICATION ---
             await self.notifier.send_notification(
                 f"✅ TRADE CLOSED: {position.get('direction_str').upper()} {self.symbol}\n"
                 f"Exit @ {finalized_trade.get('exit_price',0):.4f}\n"
@@ -104,11 +102,14 @@ class TradeCycleProcessor:
 
         if not self.session_manager.can_open_new_trade(candle_data.name):
             return
-
+        
+        probs = candle_data.get('probabilities', {})
+        # Defensive patch: ensure all keys -1, 0, 1 are present and cast to float
+        model_probabilities = {k: float(probs.get(k, 0.0)) for k in [-1, 0, 1]}
         trade_plan = self.trade_execution_engine.calculate_entry_details(
             signal=signal, current_capital=self.session_manager.get_current_capital(),
             current_price=candle_data['close'], current_bar_features=candle_data,
-            model_probabilities=pd.Series(candle_data.get('probabilities', {}))
+            model_probabilities=pd.Series(model_probabilities)
         )
         if not trade_plan: return
         
@@ -122,6 +123,23 @@ class TradeCycleProcessor:
             entry_order = await self.exchange_adapter.place_market_order(
                 self.symbol, trade_plan['side'], trade_plan['quantity']
             )
+            
+                        # ----------- NEW: Poll for fill status -----------
+            order_id = entry_order['orderId']
+            max_wait = 30  # seconds
+            interval = 1   # seconds
+            elapsed = 0
+            order_info = entry_order
+            while order_info.get('status') != 'FILLED' and elapsed < max_wait:
+                await asyncio.sleep(interval)
+                elapsed += interval
+                order_info = await self.exchange_adapter.get_order_info(self.symbol, order_id)
+            if order_info.get('status') != 'FILLED':
+                logger.error(f"Order {order_id} not filled after {max_wait} seconds. Aborting entry workflow.")
+                await self.notifier.send_notification(f"🚨 ERROR: Order {order_id} not filled after {max_wait}s.", level='error')
+                await self.trade_execution_engine.cleanup_failed_entry(self.symbol, entry_order, None, None)
+                return
+            # -----------------------------------------------
             sl_order, tp_order = await self.trade_execution_engine.place_and_verify_sltp_orders(trade_plan)
             liq_price = await self.exchange_adapter.get_position_liquidation_price(self.symbol)
             final_position = self.trade_execution_engine.reconcile_open_position(
@@ -129,7 +147,7 @@ class TradeCycleProcessor:
             )
             self.session_manager.set_open_position(final_position)
             
-            # --- ADDED NOTIFICATION ---
+            # --- NOTIFICATION ---
             await self.notifier.send_notification(
                 f"🚀 TRADE ENTERED: {final_position.get('direction_str').upper()} {self.symbol}\n"
                 f"Entry @ {final_position.get('entry_price',0):.4f}\n"

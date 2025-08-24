@@ -13,7 +13,6 @@ from datetime import datetime, timezone
 # Import configuration from params.py and paths.py
 try:
     from config.params import AppConfig, FLOAT_EPSILON
-    from config.paths import PATHS
 except ImportError as e:
     logging.critical(f"Failed to import necessary configuration modules: {e}. Ensure config/params.py and config/paths.py exist and are correctly structured.", exc_info=True)
     raise # Re-raise to prevent unconfigured manager from being used

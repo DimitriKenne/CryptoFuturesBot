@@ -222,7 +222,7 @@ class ModelTrainer:
         callbacks = []
         monitor_metric = 'val_loss' if val_data or (lstm_params.validation_split > 0) else 'loss'
         if lstm_params.early_stopping_patience is not None and lstm_params.early_stopping_patience > 0:
-            callbacks.append(tf.keras.callbacks.EarlyStopping(monitor=monitor_metric, patience=lstm_params.early_stopping_patience, restore_best_weights=True))
+            callbacks.append(tf.keras.callbacks.EarlyStopping(monitor=monitor_metric, patience=lstm_params.early_stopping_patience, restore_best_weights=False))
         
         if symbol and interval:
             model_dir = self.dm.get_model_dir(self.model_type, symbol, interval)

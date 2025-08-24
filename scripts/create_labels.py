@@ -102,7 +102,7 @@ def create_labels_pipeline(symbol: str, interval: str, labeling_strategy_name: s
     # --- 2. EXECUTION PHASE (ORCHESTRATING THE WORKFLOW) ---
     # Load Data
     logger.info(f"Loading processed data for {symbol} {interval}...")
-    df_input = dm.load_data(symbol=symbol, interval=interval, data_type='processed')
+    df_input = dm.load_dataframe(data_type='processed', symbol=symbol, interval=interval)
     if df_input is None or df_input.empty:
         logger.critical("Processed data is empty or not found. Exiting.")
         sys.exit(1)
@@ -126,11 +126,11 @@ def create_labels_pipeline(symbol: str, interval: str, labeling_strategy_name: s
         sys.exit(1)
         
     labeled_data_to_save = pd.DataFrame(df_labeled['label'])
-    dm.save_data(
-        df_to_save=labeled_data_to_save,
+    dm.save_dataframe(
+        df=labeled_data_to_save,
+        data_type='labeled',
         symbol=symbol,
         interval=interval,
-        data_type='labeled'
     )
     logger.info(f"Final labeled data saved successfully.")
 

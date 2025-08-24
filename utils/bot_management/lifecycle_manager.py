@@ -1,5 +1,3 @@
-# utils/bot_management/lifecycle_manager.py
-
 import logging
 from typing import TYPE_CHECKING, Optional
 
@@ -40,7 +38,12 @@ class LifecycleManager:
         return self.session_manager.get_last_processed_timestamp()
 
     async def _reconcile_state_with_exchange(self):
-        """Implements the robust two-phase reconciliation logic."""
+        """
+        Implements the robust two-phase reconciliation logic.
+        The bot manages all positions and orders for the trading symbol,
+        relying solely on order IDs. Anything not in the bot's state is
+        considered orphan and will be closed/cancelled.
+        """
         logger.info("--- Initiating State Reconciliation ---")
         
         # --- Phase A: Fetch Ground Truth ---
@@ -49,17 +52,37 @@ class LifecycleManager:
         bot_position = self.session_manager.get_open_position()
 
         # --- Phase B: Reconcile State & Enforce Protection ---
-        
-        # 1. Reconcile Active Position
+        # 1. Reconcile Active Position(s)
         if len(exchange_positions) > 1:
-            logger.critical(f"Multiple positions found for {self.symbol} on exchange. Manual intervention required.")
-            raise ConfigurationError("Multiple positions detected. Cannot reconcile automatically.")
+            logger.critical(f"Multiple positions found for {self.symbol} on exchange. Attempting to close orphan positions.")
+            # Close all positions, unless one matches bot_position (by entry price and quantity)
+            orphan_positions = []
+            for pos in exchange_positions:
+                if bot_position:
+                    # Compare by entryPrice and quantity; can be enhanced if needed
+                    if (str(pos.get("entryPrice")) != str(bot_position.get("entryPrice")) or 
+                        str(pos.get("quantity")) != str(bot_position.get("quantity"))):
+                        orphan_positions.append(pos)
+                else:
+                    orphan_positions.append(pos)
+            for orphan in orphan_positions:
+                logger.warning(f"Closing orphan position: {orphan}")
+                try:
+                    await self.exchange_adapter.close_position(self.symbol, orphan)
+                except Exception as e:
+                    logger.error(f"Failed to close orphan position: {e}")
+            raise ConfigurationError("Multiple positions detected. Orphans attempted to close. Manual check recommended.")
 
+        # There is 0 or 1 position
         exchange_pos = exchange_positions[0] if exchange_positions else None
 
         if exchange_pos and not bot_position:
-            logger.critical(f"Orphan position found on exchange but not in bot state. Manual intervention required.")
-            raise ConfigurationError(f"Orphan position detected: {exchange_pos}")
+            logger.critical(f"Orphan position found on exchange but not in bot state. Closing position.")
+            try:
+                await self.exchange_adapter.close_position(self.symbol, exchange_pos)
+            except Exception as e:
+                logger.error(f"Failed to close orphan position: {e}")
+            raise ConfigurationError(f"Orphan position detected and attempted to close: {exchange_pos}")
 
         if not exchange_pos and bot_position:
             logger.warning(f"Ghost position found in bot state but not on exchange. Clearing bot state.")
@@ -69,42 +92,42 @@ class LifecycleManager:
         if exchange_pos and bot_position:
             logger.info("Bot and exchange positions match. Adopting exchange state.")
             # Update bot position with the latest from exchange (e.g., unrealized PnL)
-            bot_position['entryPrice'] = exchange_pos['entryPrice']
-            bot_position['quantity'] = exchange_pos['quantity']
+            bot_position['entryPrice'] = exchange_pos.get('entryPrice')
+            bot_position['quantity'] = exchange_pos.get('quantity')
             self.session_manager.set_open_position(bot_position)
 
         # 2. Reconcile SL/TP Orders
         if bot_position:
             ideal_sl_id = bot_position.get('sl_order_id')
             ideal_tp_id = bot_position.get('tp_order_id')
-            
-            # Check if ideal orders exist
-            sl_exists = any(o['orderId'] == ideal_sl_id for o in exchange_orders)
-            tp_exists = any(o['orderId'] == ideal_tp_id for o in exchange_orders)
+
+            # Check if ideal orders exist on exchange
+            sl_exists = any(str(o.get('orderId')) == str(ideal_sl_id) for o in exchange_orders)
+            tp_exists = any(str(o.get('orderId')) == str(ideal_tp_id) for o in exchange_orders)
 
             if not sl_exists:
-                logger.warning(f"Missing SL order for position {bot_position['id']}. Re-placing now.")
-                # Re-place logic would go here, calling trade_execution_engine
-                # For now, we raise an error to be safe
-                raise ConfigurationError("Missing SL order on startup. Needs manual check.")
+                logger.warning(f"Missing SL order for position {bot_position.get('id')}. Needs to be re-placed.")
+                # Place logic should be implemented/called here
+                raise ConfigurationError("Missing SL order on startup. Needs manual check or auto-replace.")
 
             if not tp_exists:
-                logger.warning(f"Missing TP order for position {bot_position['id']}. Re-placing now.")
-                raise ConfigurationError("Missing TP order on startup. Needs manual check.")
-                
-            # 3. Cleanup Orphan Orders
-            legitimate_order_ids = {ideal_sl_id, ideal_tp_id}
-            orphan_orders = [o for o in exchange_orders if o['orderId'] not in legitimate_order_ids]
+                logger.warning(f"Missing TP order for position {bot_position.get('id')}. Needs to be re-placed.")
+                raise ConfigurationError("Missing TP order on startup. Needs manual check or auto-replace.")
+            
+            # 3. Cleanup Orphan Orders (orders not in bot state)
+            # Legitimate order IDs (SL/TP for the position)
+            legitimate_order_ids = set([str(ideal_sl_id), str(ideal_tp_id)])
+            orphan_orders = [o for o in exchange_orders if str(o.get('orderId')) not in legitimate_order_ids]
             if orphan_orders:
-                orphan_ids = [o['orderId'] for o in orphan_orders]
+                orphan_ids = [o.get('orderId') for o in orphan_orders]
                 logger.warning(f"Found {len(orphan_ids)} orphan orders. Cancelling them: {orphan_ids}")
                 await self.exchange_adapter.cancel_multiple_orders(self.symbol, orphan_ids)
 
         elif not bot_position and exchange_orders:
-             # No position, so all orders for this symbol are orphans
-             orphan_ids = [o['orderId'] for o in exchange_orders]
-             logger.warning(f"No active position, but found {len(orphan_ids)} open orders. Cancelling all.")
-             await self.exchange_adapter.cancel_all_orders(self.symbol)
+            # No position, so all orders for this symbol are orphans
+            orphan_ids = [o.get('orderId') for o in exchange_orders]
+            logger.warning(f"No active position, but found {len(orphan_ids)} open orders. Cancelling all.")
+            await self.exchange_adapter.cancel_multiple_orders(self.symbol, orphan_ids)
 
         logger.info("--- State Reconciliation Complete ---")
 
@@ -113,7 +136,7 @@ class LifecycleManager:
         logger.info("--- Bot Lifecycle: Shutdown Phase ---")
         open_position = self.session_manager.get_open_position()
         if open_position:
-            logger.info(f"Closing open position {open_position['id']} due to shutdown...")
+            logger.info(f"Closing open position {open_position.get('id')} due to shutdown...")
             try:
                 latest_price = await self.exchange_adapter.get_latest_price(self.symbol)
                 await trade_cycle_processor.execute_close_workflow(open_position, "graceful_shutdown", latest_price)

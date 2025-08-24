@@ -8,10 +8,9 @@ from datetime import datetime
 from typing import Dict, Any, Optional, Tuple, List
 from utils.exceptions import OrderExecutionError, ConfigurationError
 
-# Import the main AppConfig from your centralized configuration
 from config.params import AppConfig, FLOAT_EPSILON
-# Import the TradeCalculationHelpers
 from utils.strategy_execution.trade_calculation_helpers import TradeCalculationHelpers
+from utils.exchange_adapters.exchange_interface import ExchangeInterface
 
 logger = logging.getLogger(__name__)
 
@@ -23,7 +22,7 @@ class TradeExecutionEngine:
     without direct interaction with exchange APIs or data fetching.
     """
 
-    def __init__(self, app_config: AppConfig):
+    def __init__(self, app_config: AppConfig, exchange_adapter: Optional[ExchangeInterface] = None, symbol: Optional[str] = None):
         """
         Initializes the TradeExecutionEngine by extracting all necessary configuration
         parameters from the provided AppConfig object.
@@ -33,6 +32,8 @@ class TradeExecutionEngine:
                                     containing all sub-configurations (trading, exchange, features).
                                     It is assumed that this app_config has already been
                                     validated by config/validator.py externally.
+            exchange_adapter (ExchangeInterface, optional): Exchange adapter instance for live trading.
+            symbol (str, optional): Trading symbol (e.g. "ADAUSDT") for live trading. Not required for backtesting.
         """
         self.logger = logging.getLogger(self.__class__.__name__)
         self.logger.info("Initializing TradeExecutionEngine...")
@@ -46,7 +47,7 @@ class TradeExecutionEngine:
         self.backtest_config = app_config.trading.backtest
 
         self.exchange_config = app_config.exchange
-        self.feature_config = app_config.features # For volatility regime column name reference
+        self.feature_config = app_config.features
 
         # --- Pre-calculated Rates for Efficiency ---
         self.trading_fee_rate = self.trade_execution_config.trading_fee_pct / 100.0
@@ -55,13 +56,14 @@ class TradeExecutionEngine:
         self.liquidation_fee_rate = self.backtest_config.liquidation_fee_pct / 100.0
 
         # --- Initialize TradeCalculationHelpers ---
-        # This instance provides access to all helper functions
         self.trade_calculation_helpers = TradeCalculationHelpers(app_config=app_config)
 
-        # Cache column names for quick access, derived from app_config via TradeCalculationHelpers
+        # Exchange adapter and symbol for live trading
+        self.exchange_adapter = exchange_adapter
+        self.symbol = symbol
+
         self.volatility_regime_col_name = self.trade_calculation_helpers.volatility_regime_col_name
         self.atr_vol_adj_col_name = self.trade_calculation_helpers.atr_vol_adj_col_name
-
 
         self.logger.info("TradeExecutionEngine initialized with configurations and helpers.")
 
@@ -102,12 +104,9 @@ class TradeExecutionEngine:
             self.logger.warning("Current bar features are empty. Cannot calculate entry.")
             return None
 
-        # Determine trade side string
         side = 'buy' if signal == 1 else 'sell'
         direction_str = 'long' if signal == 1 else 'short'
 
-
-        # 2. Apply Entry Filters 🛡️
         filtered_signal = self.trade_calculation_helpers.apply_entry_filters(
             signal=signal,
             latest_features=current_bar_features,
@@ -118,9 +117,6 @@ class TradeExecutionEngine:
             self.logger.info(f"Signal {signal} for {current_bar_features.name} was filtered out. No entry.")
             return None
 
-        # 3. Adjust Entry Price for Slippage
-        # For 'buy' (long), we assume slight upward slippage, so entry price increases.
-        # For 'sell' (short), we assume slight downward slippage, so entry price decreases.
         slippage_adjusted_price = current_price * (1 + self.slippage_tolerance_rate * filtered_signal)
         adjusted_entry_price = self.trade_calculation_helpers._round_price(slippage_adjusted_price)
 
@@ -128,11 +124,10 @@ class TradeExecutionEngine:
             self.logger.error(f"Adjusted entry price invalid ({adjusted_entry_price}). Cannot proceed with entry.")
             return None
 
-        # 4. Calculate Stop Loss (SL) and Take Profit (TP) Prices 🎯
-        latest_atr = current_bar_features.get(self.atr_vol_adj_col_name) # Get ATR from features
+        latest_atr = current_bar_features.get(self.atr_vol_adj_col_name)
         stop_loss_price, take_profit_price = self.trade_calculation_helpers.calculate_sl_tp_prices(
             side=side,
-            current_price=adjusted_entry_price, # Use adjusted price as basis for SL/TP
+            current_price=adjusted_entry_price,
             latest_atr=latest_atr
         )
 
@@ -140,7 +135,6 @@ class TradeExecutionEngine:
             self.logger.warning(f"Stop loss price could not be calculated or is invalid ({stop_loss_price}). Blocking entry.")
             return None
 
-        # 5. Estimate Liquidation Price 📉
         liquidation_price = self.trade_calculation_helpers.estimate_liquidation_price(
             side=side,
             entry_price=adjusted_entry_price
@@ -150,7 +144,6 @@ class TradeExecutionEngine:
             self.logger.warning(f"Liquidation price could not be estimated or is invalid ({liquidation_price}). Blocking entry.")
             return None
 
-        # 6. Check SL Safety from Liquidation ✅
         is_sl_safe = self.trade_calculation_helpers.is_sl_safe_from_liquidation(
             side=side,
             stop_loss_price=stop_loss_price,
@@ -160,7 +153,6 @@ class TradeExecutionEngine:
             self.logger.warning(f"Stop loss ({stop_loss_price:.{self.exchange_config.price_precision}f}) is too close to liquidation price ({liquidation_price:.{self.exchange_config.price_precision}f}). Blocking entry.")
             return None
 
-        # 7. Determine Position Size 📏
         adjusted_quantity, notional_value = self.trade_calculation_helpers.calculate_position_size(
             current_equity=current_capital,
             current_price=adjusted_entry_price,
@@ -172,37 +164,29 @@ class TradeExecutionEngine:
             self.logger.warning(f"Position size could not be determined or is zero ({adjusted_quantity}). Blocking entry.")
             return None
 
-        # 8. Calculate Initial Margin and Entry Fee 💲
-        # Initial margin is (notional value / leverage)
         initial_margin = notional_value / self.risk_config.leverage
-
-        # Entry fee is (notional value * trading fee rate)
         entry_fee = notional_value * self.trading_fee_rate
 
-        # 9. Determine Max Holding Bars ⏱️
-        # Get the current volatility regime from the features (it will be an integer: 0, 1, or 2)
         current_regime = current_bar_features.get(self.volatility_regime_col_name, 0)
-        # Ensure it's an integer for dictionary lookup
         if pd.isna(current_regime):
             self.logger.warning(f"Volatility regime for current bar is NaN. Defaulting max_holding_bars to 0 (no time limit).")
-            max_holding_bars = 0 # Or a fallback value if regime is missing
+            max_holding_bars = 0
         else:
             try:
                 current_regime_int = int(current_regime)
-                # Look up max holding bars for this regime from config
                 max_holding_bars = self.volatility_regime_config.max_holding_bars.get(current_regime_int, 0)
-                if max_holding_bars is None: # Handle if a regime exists but has no configured max_holding_bars
+                if max_holding_bars is None:
                     max_holding_bars = 0
                     self.logger.warning(f"Max holding bars not configured for regime {current_regime_int}. Defaulting to 0.")
             except (ValueError, TypeError):
                 self.logger.warning(f"Invalid volatility regime value '{current_regime}'. Defaulting max_holding_bars to 0.")
                 max_holding_bars = 0
 
-
-        # 10. Construct and Return Entry Details Dictionary 📦
         entry_details = {
+            'symbol': self.symbol,  # will be None if not provided (backtest)
             'direction_int': filtered_signal,
             'direction_str': direction_str,
+            'side': 'BUY' if direction_str == 'long' else 'SELL',
             'entry_price': adjusted_entry_price,
             'quantity': adjusted_quantity,
             'notional_value': notional_value,
@@ -212,10 +196,10 @@ class TradeExecutionEngine:
             'initial_margin': initial_margin,
             'entry_fee': entry_fee,
             'max_holding_bars': max_holding_bars,
-            'entry_time': current_bar_features.name, # Use timestamp from bar index
-            'entry_bar_index': current_bar_index, # The index of the bar that triggered entry
+            'entry_time': current_bar_features.name,
+            'entry_bar_index': current_bar_index,
             'model_probabilities': model_probabilities.to_dict() if model_probabilities is not None else {},
-            'entry_reason': 'ML_signal_entry'
+            'entry_reason': 'ML_signal_entry',
         }
 
         self.logger.info(
@@ -244,75 +228,62 @@ class TradeExecutionEngine:
         """
         self.logger.debug(f"🔍 Checking exit conditions for {open_trade.get('direction_str').upper()} | Entry: {open_trade.get('entry_price'):.4f} | SL: {open_trade.get('stop_loss_price'):.4f} | TP: {open_trade.get('take_profit_price'):.4f} | Bar: {current_bar_index}")
 
-        # Ensure essential data points are present
         required_ohlc = ['open', 'high', 'low', 'close']
         for col in required_ohlc:
             if col not in current_bar_data.index or pd.isna(current_bar_data[col]):
                 self.logger.error(f"Current bar data missing or invalid OHLC value for '{col}'. Exiting trade.")
-                return True, 'invalid_ohlc', np.nan # Exit immediately on invalid data
+                return True, 'invalid_ohlc', np.nan
 
-        # Extract relevant info for brevity
         trade_direction_int = open_trade.get('direction_int')
         sl_price = open_trade.get('stop_loss_price')
         tp_price = open_trade.get('take_profit_price')
         liq_price = open_trade.get('liquidation_price')
-        
+
         current_open = current_bar_data['open']
         current_high = current_bar_data['high']
         current_low = current_bar_data['low']
         current_close = current_bar_data['close']
-        
-        # Determine effective exit price based on bar's prices and hit level
-        exit_price_candidate = np.nan # Initialize as NaN
 
+        exit_price_candidate = np.nan
 
-        # --- 1. Liquidation Check (Highest Priority) ---
+        # --- 1. Liquidation Check ---
         if pd.notna(liq_price) and liq_price > FLOAT_EPSILON:
-            if trade_direction_int == 1: # Long position
+            if trade_direction_int == 1:
                 if current_low <= liq_price + FLOAT_EPSILON:
                     self.logger.warning(f"Long position liquidated at {liq_price:.{self.exchange_config.price_precision}f} (current_low: {current_low:.{self.exchange_config.price_precision}f}).")
-                    exit_price_candidate = liq_price # Exit at liquidation price
+                    exit_price_candidate = liq_price
                     return True, 'liquidation', self.trade_calculation_helpers._round_price(exit_price_candidate)
-            elif trade_direction_int == -1: # Short position
+            elif trade_direction_int == -1:
                 if current_high >= liq_price - FLOAT_EPSILON:
                     self.logger.warning(f"Short position liquidated at {liq_price:.{self.exchange_config.price_precision}f} (current_high: {current_high:.{self.exchange_config.price_precision}f}).")
-                    exit_price_candidate = liq_price # Exit at liquidation price
+                    exit_price_candidate = liq_price
                     return True, 'liquidation', self.trade_calculation_helpers._round_price(exit_price_candidate)
 
-
         # --- 2. Stop Loss (SL) Hit Check ---
-        # Only check SL if it was set and is valid
         if pd.notna(sl_price) and sl_price > FLOAT_EPSILON:
-            if trade_direction_int == 1: # Long position
+            if trade_direction_int == 1:
                 if current_low <= sl_price + FLOAT_EPSILON:
-                    # If SL hit, the exit price is the SL price itself
                     self.logger.info(f"Long position Stop Loss hit at {sl_price:.{self.exchange_config.price_precision}f} (current_low: {current_low:.{self.exchange_config.price_precision}f}).")
                     exit_price_candidate = sl_price
                     return True, 'stop_loss', self.trade_calculation_helpers._round_price(exit_price_candidate)
-            elif trade_direction_int == -1: # Short position
+            elif trade_direction_int == -1:
                 if current_high >= sl_price - FLOAT_EPSILON:
-                    # If SL hit, the exit price is the SL price itself
                     self.logger.info(f"Short position Stop Loss hit at {sl_price:.{self.exchange_config.price_precision}f} (current_high: {current_high:.{self.exchange_config.price_precision}f}).")
                     exit_price_candidate = sl_price
                     return True, 'stop_loss', self.trade_calculation_helpers._round_price(exit_price_candidate)
 
-
         # --- 3. Take Profit (TP) Hit Check ---
-        # Only check TP if it was set and is valid
         if pd.notna(tp_price) and tp_price > FLOAT_EPSILON:
-            if trade_direction_int == 1: # Long position
+            if trade_direction_int == 1:
                 if current_high >= tp_price - FLOAT_EPSILON:
-                    # If TP hit, the exit price is the TP price itself
                     self.logger.info(f"Long position Take Profit hit at {tp_price:.{self.exchange_config.price_precision}f} (current_high: {current_high:.{self.exchange_config.price_precision}f}).")
                     exit_price_candidate = tp_price
                     return True, 'take_profit', self.trade_calculation_helpers._round_price(exit_price_candidate)
-            elif trade_direction_int == -1: # Short position
+            elif trade_direction_int == -1:
                 if current_low <= tp_price + FLOAT_EPSILON:
-                    # If TP hit, the exit price is the TP price itself
                     self.logger.info(f"Short position Take Profit hit at {tp_price:.{self.exchange_config.price_precision}f} (current_low: {current_low:.{self.exchange_config.price_precision}f}).")
                     exit_price_candidate = tp_price
                     return True, 'take_profit', self.trade_calculation_helpers._round_price(exit_price_candidate)
-
 
         # --- 4. Max Holding Period Reached ---
         max_holding_bars = open_trade.get('max_holding_bars', 0)
@@ -321,25 +292,18 @@ class TradeExecutionEngine:
         if max_holding_bars > 0 and entry_bar_index is not None:
             if current_bar_index - entry_bar_index >= max_holding_bars:
                 self.logger.info(f"Max holding period of {max_holding_bars} bars reached. Exiting trade.")
-                # Exit at current bar's close price for time-based exit
                 exit_price_candidate = current_close
                 return True, 'max_holding', self.trade_calculation_helpers._round_price(exit_price_candidate)
 
-
         # --- 5. Filtered Reversal Signal ---
-        # This signal should already be filtered by the MarketDataHandler using apply_entry_filters
         current_bar_signal = current_bar_data.get('signal')
-
-        if current_bar_signal is not None and current_bar_signal != 0: # Ensure there's an actual signal
+        if current_bar_signal is not None and current_bar_signal != 0:
             if (trade_direction_int == 1 and current_bar_signal == -1) or \
                (trade_direction_int == -1 and current_bar_signal == 1):
                 self.logger.info(f"Reversal signal ({current_bar_signal}) detected for open {open_trade.get('direction_str')} position. Exiting trade.")
-                # Exit at current bar's close price for reversal signal
                 exit_price_candidate = current_close
                 return True, 'reversal_signal', self.trade_calculation_helpers._round_price(exit_price_candidate)
 
-
-        # --- No Exit Condition Met ---
         self.logger.debug(f"No exit conditions met for trade {open_trade.get('direction_str')} at bar index {current_bar_index}.")
         return False, None, None
 
@@ -370,32 +334,23 @@ class TradeExecutionEngine:
         """
         self.logger.debug(f"Calculating exit details for trade (entry {open_trade.get('entry_price')}) at exit price {exit_price} due to {exit_reason}")
 
-        # 1. Input Validation: Basic sanity checks
         if not open_trade or pd.isna(exit_price) or exit_price <= FLOAT_EPSILON or not isinstance(exit_time, datetime):
             self.logger.error("Invalid input for calculate_exit_details. Cannot calculate exit details.")
-            return {} # Return empty dict or raise error as appropriate for your error handling
+            return {}
 
-        # Determine actual exit price with conditional slippage
         actual_exit_price = exit_price
         if exit_reason != 'liquidation':
-            # Apply slippage to exit price (opposite direction of entry)
-            # If trade was long (1), selling to close is -1, so price decreases.
-            # If trade was short (-1), buying to close is 1, so price increases.
             direction_int = open_trade.get('direction_int', 0)
             slippage_multiplier = -1 if direction_int == 1 else (1 if direction_int == -1 else 0)
-
             actual_exit_price = exit_price * (1 + self.slippage_tolerance_rate * slippage_multiplier)
             actual_exit_price = self.trade_calculation_helpers._round_price(actual_exit_price)
             if pd.isna(actual_exit_price) or actual_exit_price <= FLOAT_EPSILON:
                 self.logger.error(f"Actual exit price invalid ({actual_exit_price}) after slippage adjustment. Using original exit price.")
-                actual_exit_price = exit_price # Fallback to original if slippage calculation fails
+                actual_exit_price = exit_price
 
-        # Calculate notional value at exit for fee calculations
         quantity = open_trade.get('quantity', 0.0)
         notional_value_at_exit = actual_exit_price * quantity
 
-
-        # 3. Calculate All PnL and Fees 💲
         gross_pnl, exit_fee, liquidation_fee, net_pnl = \
             self.trade_calculation_helpers.calculate_pnl_and_fees(
                 trade_direction_int=open_trade.get('direction_int', 0),
@@ -409,37 +364,34 @@ class TradeExecutionEngine:
                 exit_reason=exit_reason
             )
 
-        # 4. Calculate Holding Duration
         holding_bars = None
         if current_bar_index is not None and open_trade.get('entry_bar_index') is not None:
             holding_bars = current_bar_index - open_trade['entry_bar_index']
-            if holding_bars < 0: # Defensive check
+            if holding_bars < 0:
                 self.logger.warning(f"Calculated holding_bars is negative ({holding_bars}). Setting to 0.")
                 holding_bars = 0
 
         holding_duration_seconds = 0.0
         if isinstance(open_trade.get('entry_time'), datetime) and isinstance(exit_time, datetime):
             holding_duration_seconds = (exit_time - open_trade['entry_time']).total_seconds()
-            if holding_duration_seconds < 0: # Defensive check
+            if holding_duration_seconds < 0:
                 self.logger.warning(f"Calculated holding_duration_seconds is negative ({holding_duration_seconds}). Setting to 0.")
                 holding_duration_seconds = 0.0
 
-
-        # 5. Construct Completed Trade Record 📦
-        completed_trade = open_trade.copy() # Start with all original entry details
+        completed_trade = open_trade.copy()
         completed_trade.update({
             'exit_price': actual_exit_price,
             'exit_time': exit_time,
             'exit_reason': exit_reason,
             'gross_pnl': gross_pnl,
             'exit_fee': exit_fee,
-            'liquidation_fee': liquidation_fee, # Explicitly include liquidation fee
-            'total_fees': open_trade.get('entry_fee', 0.0) + exit_fee + liquidation_fee, # Sum all fees
+            'liquidation_fee': liquidation_fee,
+            'total_fees': open_trade.get('entry_fee', 0.0) + exit_fee + liquidation_fee,
             'net_pnl': net_pnl,
             'holding_bars': holding_bars,
             'holding_duration_seconds': holding_duration_seconds,
-            'is_closed': True, # Mark the trade as closed
-            'notional_value_at_exit': notional_value_at_exit # Add notional value at exit for reference
+            'is_closed': True,
+            'notional_value_at_exit': notional_value_at_exit
         })
 
         self.logger.info(
@@ -448,8 +400,8 @@ class TradeExecutionEngine:
         self.logger.info(f"🔴 Trade closed due to '{exit_reason}' @ {actual_exit_price:.4f} | NetPnL: {net_pnl:.2f}")
         return completed_trade
 
-   # ====================================================================
-    # --- NEW Methods for Live Trading Workflow (No direct exchange interaction) ---
+    # ====================================================================
+    # --- Methods for Live Trading Workflow ---
     # ====================================================================
 
     async def cancel_remaining_orders(self, position: Dict[str, Any], exit_reason: str):
@@ -459,7 +411,7 @@ class TradeExecutionEngine:
 
         sl_order_id = position.get('sl_order_id')
         tp_order_id = position.get('tp_order_id')
-        symbol = position.get('symbol')
+        symbol = position.get('symbol', self.symbol)
 
         order_to_cancel = None
         if exit_reason == 'stop_loss' and tp_order_id:
@@ -467,7 +419,6 @@ class TradeExecutionEngine:
         elif exit_reason == 'take_profit' and sl_order_id:
             order_to_cancel = sl_order_id
         elif sl_order_id and tp_order_id:
-            # For other reasons (e.g., graceful shutdown), cancel both
             await self.exchange_adapter.cancel_multiple_orders(symbol, [sl_order_id, tp_order_id])
             return
 
@@ -486,25 +437,29 @@ class TradeExecutionEngine:
             'tp_order_id': tp_order['orderId'],
             'liquidation_price': liq_price
         })
-        self.logger.info(f"Position reconciled with exchange data: ID {final_position['id']}")
+        self.logger.info(f"Position reconciled with exchange data: ID {final_position.get('id', '?')}")
         return final_position
 
     async def place_and_verify_sltp_orders(self, trade_plan: Dict) -> Tuple[Dict, Dict]:
-        """Places and robustly verifies SL and TP orders, returning confirmed order details."""
+        """Places and robustly verifies SL and TP orders, returning confirmed order details.
+
+        Requires 'symbol' and 'side' to be present in trade_plan (or self.symbol for symbol).
+        """
         if self.exchange_adapter is None:
             raise ConfigurationError("Exchange adapter is not configured in TradeExecutionEngine.")
 
-        symbol = trade_plan['direction_str'].upper()
-        side_to_close = 'SELL' if trade_plan['direction_str'] == 'long' else 'BUY'
+        symbol = trade_plan.get('symbol', self.symbol)
+        if symbol is None:
+            raise ConfigurationError("Trade plan does not have a symbol and self.symbol is not set. This is required for live trading.")
+
+        side_to_close = 'SELL' if trade_plan.get('side') == 'BUY' else 'BUY'
         quantity = trade_plan['quantity']
 
-        # Place SL
         sl_order = await self.exchange_adapter.place_stop_market_order(
             symbol=symbol, side=side_to_close, quantity=quantity, stop_price=trade_plan['stop_loss_price']
         )
         await self._verify_order(symbol, sl_order['orderId'])
 
-        # Place TP
         tp_order = await self.exchange_adapter.place_take_profit_market_order(
             symbol=symbol, side=side_to_close, quantity=quantity, stop_price=trade_plan['take_profit_price']
         )
@@ -531,12 +486,10 @@ class TradeExecutionEngine:
         if self.exchange_adapter is None: return
 
         self.logger.warning("--- INITIATING FAILED ENTRY CLEANUP ---")
-        # Attempt to cancel any stray SL/TP orders that might have been placed
         orders_to_cancel = [o['orderId'] for o in [sl_order, tp_order] if o and o.get('orderId')]
         if orders_to_cancel:
             await self.exchange_adapter.cancel_multiple_orders(symbol, orders_to_cancel)
 
-        # Check if a position was actually opened
         open_positions = await self.exchange_adapter.get_open_positions(symbol)
         if open_positions:
             self.logger.critical(f"A position for {symbol} exists after failed entry. Attempting to close it immediately.")

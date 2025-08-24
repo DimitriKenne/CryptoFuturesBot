@@ -42,8 +42,6 @@ from xgboost import XGBClassifier
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(PROJECT_ROOT))
 
-# Using new PATH_CONFIG for consistency
-from config.paths import PATH_CONFIG, PATHS
 from config.params import app_config
 from config.model import ModelConfig, RandomForestParams, XGBoostParams, LSTMParams
 from config.validator import validate_config
@@ -126,11 +124,11 @@ def load_and_split_data(symbol: str, interval: str, train_split_ratio: float, fe
     logger.info(f"Loading data for {symbol.upper()} @ {interval}...")
     dm = DataManager()
 
-    X = dm.load_data(symbol=symbol.upper(), interval=interval, data_type='processed')
+    X = dm.load_dataframe(data_type='processed', symbol=symbol.upper(), interval=interval)
     if X is None or X.empty:
         raise FileNotFoundError(f"Processed feature data not found or is empty for {symbol.upper()} {interval}.")
-    
-    ydf = dm.load_data(symbol=symbol.upper(), interval=interval, data_type='labeled')
+
+    ydf = dm.load_dataframe(data_type='labeled', symbol=symbol.upper(), interval=interval)
     if ydf is None or ydf.empty:
         raise FileNotFoundError(f"Labeled data not found or is empty for {symbol.upper()} {interval}.")
 

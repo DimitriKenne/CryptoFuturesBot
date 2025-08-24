@@ -6,7 +6,7 @@ from typing import Dict, Any, Optional, Literal
 class RiskConfig:
     initial_capital: float = 5000.0
     risk_per_trade_pct: float = 1.0 # Percentage of capital to risk per trade
-    leverage: int = 10
+    leverage: int = 1
 
 @dataclass
 class TradeExecutionConfig:
@@ -17,7 +17,7 @@ class TradeExecutionConfig:
 
 @dataclass
 class EntryFilterConfig:
-    confidence_filter_enabled: bool = True
+    confidence_filter_enabled: bool = False
     confidence_threshold_long_pct: float = 10 # Confidence threshold for long entries (percentage)
     confidence_threshold_short_pct: float = 10 # Confidence threshold for short entries (percentage)
     volatility_regime_filter_enabled: bool = False

@@ -25,10 +25,10 @@ class ExchangeConfig:
     timeout: int = 30000
     tld: Literal['com', 'us'] = field(default_factory=lambda: os.getenv('BINANCE_TLD', 'com'))
 
-    price_precision: int = 4
-    quantity_precision: int = 2
-    min_quantity: float = 1.0
-    min_notional: float = 5.0
+    price_precision: int = 2 # Price precision for orders to retrieve from your exchange depending on the market
+    quantity_precision: int = 3 # Quantity precision for orders to retrieve from your exchange depending on the market
+    min_quantity: float = 0.001 # Minimum quantity for orders to retrieve from your exchange depending on the market
+    min_notional: float = 5.0 # Minimum notional for orders to retrieve from your exchange depending on the market
 
 # Default config instance
 DEFAULT_EXCHANGE_CONFIG = ExchangeConfig()

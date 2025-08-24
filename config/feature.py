@@ -83,7 +83,7 @@ class FeatureConfig:
     })
 
     # NaN Handling
-    remove_nan_rows: bool = False
+    remove_nan_rows: bool = True
 
     # --- REMOVED: sequence_length_bars is now in ModelConfig ---
     
