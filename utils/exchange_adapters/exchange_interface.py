@@ -31,10 +31,10 @@ class ExchangeInterface(ABC):
         self.config = config
         self.testnet = config.testnet # Default to testnet for safety
         # These will be updated by the concrete adapter from exchange info
-        self.price_precision = config.price_precision
-        self.quantity_precision = config.quantity_precision
-        self.min_quantity = config.min_quantity
-        self.min_notional = config.min_notional
+        self.price_precision = config.get_symbol_params(self.symbol).get("price_precision", 2)
+        self.quantity_precision = config.get_symbol_params(self.symbol).get("quantity_precision", 3)
+        self.min_quantity = config.get_symbol_params(self.symbol).get("min_quantity", 0.0)
+        self.min_notional = config.get_symbol_params(self.symbol).get("min_notional", 5.0)
 
     @abstractmethod
     async def async_setup(self):

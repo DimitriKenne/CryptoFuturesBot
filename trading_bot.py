@@ -42,6 +42,7 @@ class TradingBot:
 
         self.is_running = False
         self.shutdown_requested = False
+        self.stop_event = asyncio.Event()
 
         logger.info("Initializing bot components...")
         data_manager = DataManager()
@@ -128,7 +129,11 @@ class TradingBot:
                     sleep_duration = self.trade_loop_interval_seconds - elapsed_time
                     if sleep_duration > 0:
                         self.logger.debug(f"Sleeping for {sleep_duration:.2f} seconds.")
-                        await asyncio.sleep(sleep_duration)
+                        # await asyncio.sleep(sleep_duration)
+                        try:
+                            await asyncio.wait_for(self.stop_event.wait(), timeout=sleep_duration)
+                        except asyncio.TimeoutError:
+                            pass
                     else:
                         self.logger.warning(
                             f"Loop took longer than interval ({elapsed_time:.2f}s > {self.trade_loop_interval_seconds:.2f}s). No sleep."
@@ -202,6 +207,7 @@ def main():
     def handle_shutdown_signal(sig, frame):
         logger.warning(f"Signal {sig} received. Initiating graceful shutdown...")
         bot.request_shutdown()
+        bot.stop_event.set()  # <-- Wake up main loop immediately
 
     signal.signal(signal.SIGINT, handle_shutdown_signal)
     signal.signal(signal.SIGTERM, handle_shutdown_signal)

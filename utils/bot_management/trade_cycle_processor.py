@@ -124,10 +124,10 @@ class TradeCycleProcessor:
                 self.symbol, trade_plan['side'], trade_plan['quantity']
             )
             
-                        # ----------- NEW: Poll for fill status -----------
+            # ----------- NEW: Poll for fill status -----------
             order_id = entry_order['orderId']
             max_wait = 30  # seconds
-            interval = 1   # seconds
+            interval = 1.5   # seconds
             elapsed = 0
             order_info = entry_order
             while order_info.get('status') != 'FILLED' and elapsed < max_wait:
@@ -143,7 +143,7 @@ class TradeCycleProcessor:
             sl_order, tp_order = await self.trade_execution_engine.place_and_verify_sltp_orders(trade_plan)
             liq_price = await self.exchange_adapter.get_position_liquidation_price(self.symbol)
             final_position = self.trade_execution_engine.reconcile_open_position(
-                trade_plan, entry_order, sl_order, tp_order, liq_price
+                trade_plan, order_info, sl_order, tp_order, liq_price
             )
             self.session_manager.set_open_position(final_position)
             

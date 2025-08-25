@@ -71,7 +71,7 @@ class Backtester:
             train_ratio=train_ratio,
             backtest_mode=backtest_mode
         )
-        self.trade_execution_engine = TradeExecutionEngine(app_config=self.app_config)
+        self.trade_execution_engine = TradeExecutionEngine(app_config=self.app_config, symbol=self.symbol)
         self.trading_session_manager = TradingSessionManager(app_config=self.app_config)
 
         self.logger.info("Backtester initialized. Ready to run simulation.")

@@ -22,7 +22,7 @@ class TradeCalculationHelpers:
     and applying various entry filters.
     """
 
-    def __init__(self, app_config: AppConfig):
+    def __init__(self, app_config: AppConfig, get_symbol_params_func: callable):
         """
         Initializes the TradeCalculationHelpers with the application configuration.
 
@@ -30,16 +30,12 @@ class TradeCalculationHelpers:
             app_config (AppConfig): The comprehensive application configuration object.
                                     It is assumed that this app_config has already been
                                     validated by config/validator.py externally.
+            symbol (str): The trading symbol (e.g. "ADAUSDT") for which to perform calculations. 
+            Only useful to retrieve symbol-specific parameters.
         """
         self.logger = logging.getLogger(self.__class__.__name__)
         self.config = app_config # Store the full AppConfig
-
-        # Initialize precision and minimums from exchange config for direct access
-        # These are frequently used in rounding and validation methods.
-        self.price_precision = self.config.exchange.price_precision
-        self.quantity_precision = self.config.exchange.quantity_precision
-        self.min_quantity = self.config.exchange.min_quantity
-        self.min_notional = self.config.exchange.min_notional
+        self.get_symbol_params = get_symbol_params_func
 
         # Derived column names for features from FeatureConfig and TradingConfig
         # These depend on specific config values and are best calculated once here.
@@ -58,17 +54,18 @@ class TradeCalculationHelpers:
         Returns:
             Optional[float]: The rounded price, or NaN if input is NaN/invalid.
         """
+        price_precision = self.get_symbol_params().get("price_precision", 2)
         if pd.isna(price): return np.nan
-        if not isinstance(self.price_precision, int) or self.price_precision < 0:
-             self.logger.warning(f"Invalid price_precision: {self.price_precision}. Cannot round price.")
+        if not isinstance(price_precision, int) or price_precision < 0:
+             self.logger.warning(f"Invalid price_precision: {price_precision}. Cannot round price.")
              return price
 
         try:
-            rounded_price = round(price, self.price_precision)
+            rounded_price = round(price, price_precision)
             self.logger.debug(f"Rounded price: {rounded_price}")
             return rounded_price
         except (TypeError, ValueError) as e:
-             self.logger.warning(f"Could not round price {price} to precision {self.price_precision}: {e}")
+             self.logger.warning(f"Could not round price {price} to precision {price_precision}: {e}")
              return np.nan
 
     def _round_quantity(self, quantity: Optional[float]) -> Optional[float]:
@@ -82,19 +79,21 @@ class TradeCalculationHelpers:
         Returns:
             Optional[float]: The rounded-down quantity, or NaN if input is NaN/invalid.
         """
+
+        quantity_precision = self.get_symbol_params().get("quantity_precision", 3)
         if pd.isna(quantity): return np.nan
-        if not isinstance(self.quantity_precision, int) or self.quantity_precision < 0:
-             self.logger.warning(f"Invalid quantity_precision: {self.quantity_precision}. Cannot round quantity.")
+        if not isinstance(quantity_precision, int) or quantity_precision < 0:
+             self.logger.warning(f"Invalid quantity_precision: {quantity_precision}. Cannot round quantity.")
              return quantity
 
         try:
-            factor = 10 ** self.quantity_precision
+            factor = 10 ** quantity_precision
             # Floor division equivalent for floating point precision
             rounded_quantity = math.floor(quantity * factor) / factor
             self.logger.debug(f"Rounded quantity: {rounded_quantity}")
             return rounded_quantity
         except (TypeError, ValueError) as e:
-             self.logger.warning(f"Could not round quantity {quantity} to precision {self.quantity_precision}: {e}")
+             self.logger.warning(f"Could not round quantity {quantity} to precision {quantity_precision}: {e}")
              return np.nan
 
     def _validate_quantity_and_notional(self, quantity: Optional[float], price: Optional[float]) -> bool:
@@ -109,6 +108,9 @@ class TradeCalculationHelpers:
         Returns:
             bool: True if both quantity and notional meet minimums, False otherwise.
         """
+        min_quantity = self.get_symbol_params().get("min_quantity", 0.0)
+        min_notional = self.get_symbol_params().get("min_notional", 0.0)
+
         if pd.isna(quantity) or quantity <= 0:
             self.logger.warning(f"Invalid quantity ({quantity}). Must be positive.")
             return False
@@ -116,13 +118,13 @@ class TradeCalculationHelpers:
             self.logger.warning(f"Invalid price ({price}). Must be positive.")
             return False
 
-        if quantity < self.min_quantity - FLOAT_EPSILON: # Allow for tiny float differences
-            self.logger.warning(f"Quantity ({quantity:.8f}) is below minimum allowed ({self.min_quantity:.8f}).")
+        if quantity < min_quantity - FLOAT_EPSILON: # Allow for tiny float differences
+            self.logger.warning(f"Quantity ({quantity:.8f}) is below minimum allowed ({min_quantity:.8f}).")
             return False
 
         notional_value = quantity * price
-        if notional_value < self.min_notional - FLOAT_EPSILON: # Allow for tiny float differences
-            self.logger.warning(f"Notional value ({notional_value:.2f}) is below minimum allowed ({self.min_notional:.2f}).")
+        if notional_value < min_notional - FLOAT_EPSILON: # Allow for tiny float differences
+            self.logger.warning(f"Notional value ({notional_value:.2f}) is below minimum allowed ({min_notional:.2f}).")
             return False
 
         self.logger.debug(f"Quantity {quantity:.8f} and Notional {notional_value:.2f} are valid.")
@@ -209,7 +211,8 @@ class TradeCalculationHelpers:
         self.logger.info(
             f"📏 Position Size | Equity: {current_equity:.2f} | Price: {current_price:.4f} | SL: {stop_loss_price:.4f} | Dir: {trade_direction}"
         )
-
+        price_precision = self.get_symbol_params().get("price_precision", 2)
+        quantity_precision = self.get_symbol_params().get("quantity_precision", 0.0)
         # Access risk and trade execution config via self.config
         risk_per_trade_fraction = self.config.trading.risk.risk_per_trade_pct / 100.0
         leverage = self.config.trading.risk.leverage
@@ -228,12 +231,12 @@ class TradeCalculationHelpers:
         stop_loss_distance = abs(current_price - stop_loss_price)
 
         if stop_loss_distance <= FLOAT_EPSILON: # Very small SL distance, potentially invalid or dangerous
-            self.logger.warning(f"Stop loss distance is zero or too small ({stop_loss_distance:.{self.price_precision+2}f}). Cannot calculate risk-based size meaningfully.")
+            self.logger.warning(f"Stop loss distance is zero or too small ({stop_loss_distance:.{price_precision+2}f}). Cannot calculate risk-based size meaningfully.")
             return None, None
 
         # For futures, quantity = Capital at Risk / SL Distance (in price units)
         risk_based_quantity = capital_to_risk / stop_loss_distance
-        self.logger.debug(f"Risk Calc: Equity={current_equity:.2f}, RiskAmt={capital_to_risk:.2f}, SLDist={stop_loss_distance:.{self.price_precision}f}, RiskBasedQty={risk_based_quantity:.{self.quantity_precision+4}f}")
+        self.logger.debug(f"Risk Calc: Equity={current_equity:.2f}, RiskAmt={capital_to_risk:.2f}, SLDist={stop_loss_distance:.{price_precision}f}, RiskBasedQty={risk_based_quantity:.{quantity_precision+4}f}")
 
         # --- 2. Calculate Max Size Allowed by Margin ---
         # Max Position Value = Balance / (Initial Margin Rate + Entry Fee Rate)
@@ -247,7 +250,7 @@ class TradeCalculationHelpers:
         else:
              max_position_value_usd = current_equity / effective_cost_rate
              max_allowed_quantity = max_position_value_usd / current_price if current_price > FLOAT_EPSILON else 0.0
-             self.logger.debug(f"Margin Calc: Balance={current_equity:.2f}, MaxValue={max_position_value_usd:.2f}, MaxAllowedQty={max_allowed_quantity:.{self.quantity_precision+4}f}")
+             self.logger.debug(f"Margin Calc: Balance={current_equity:.2f}, MaxValue={max_position_value_usd:.2f}, MaxAllowedQty={max_allowed_quantity:.{quantity_precision+4}f}")
 
         # --- 3. Determine Final Quantity ---
         # Use the minimum of risk-based and margin-based quantities

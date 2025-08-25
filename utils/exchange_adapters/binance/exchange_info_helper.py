@@ -34,7 +34,7 @@ class BinanceExchangeInfoHelper:
     Manages fetching and caching Binance exchange information, including symbol filters.
     Provides methods to query precision, minimums, and adjust values based on these filters.
     """
-    def __init__(self, client: AsyncClient, exchange_config: Any, logger: logging.Logger):
+    def __init__(self, client: AsyncClient, symbol: str, exchange_config: Any, logger: logging.Logger):
         """
         Initializes the BinanceExchangeInfoHelper.
 
@@ -45,16 +45,17 @@ class BinanceExchangeInfoHelper:
             logger (logging.Logger): Logger instance for logging messages.
         """
         self._client = client
+        self.symbol = symbol
         self.exchange_config = exchange_config
         self.logger = logger
         self.symbol_info_cache: Dict[str, Any] = {}
         self._exchange_info_fetched = False
 
         # Fallback values from AppConfig's ExchangeConfig for cases where API info isn't available
-        self._default_quantity_precision = self.exchange_config.quantity_precision
-        self._default_price_precision = self.exchange_config.price_precision
-        self._default_min_quantity = self.exchange_config.min_quantity
-        self._default_min_notional = self.exchange_config.min_notional
+        self._default_quantity_precision = self.exchange_config.get_symbol_params(self.symbol).get("quantity_precision", 3)
+        self._default_price_precision = self.exchange_config.get_symbol_params(self.symbol).get("price_precision", 2)
+        self._default_min_quantity = self.exchange_config.get_symbol_params(self.symbol).get("min_quantity", 0.0)
+        self._default_min_notional = self.exchange_config.get_symbol_params(self.symbol).get("min_notional", 5.0)
 
     def set_client(self, client: AsyncClient):
         """

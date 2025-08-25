@@ -22,7 +22,7 @@ class TradeExecutionEngine:
     without direct interaction with exchange APIs or data fetching.
     """
 
-    def __init__(self, app_config: AppConfig, exchange_adapter: Optional[ExchangeInterface] = None, symbol: Optional[str] = None):
+    def __init__(self, app_config: AppConfig, symbol: str = None, exchange_adapter: Optional[ExchangeInterface] = None):
         """
         Initializes the TradeExecutionEngine by extracting all necessary configuration
         parameters from the provided AppConfig object.
@@ -55,17 +55,31 @@ class TradeExecutionEngine:
         self.maintenance_margin_rate = self.backtest_config.maintenance_margin_pct / 100.0
         self.liquidation_fee_rate = self.backtest_config.liquidation_fee_pct / 100.0
 
-        # --- Initialize TradeCalculationHelpers ---
-        self.trade_calculation_helpers = TradeCalculationHelpers(app_config=app_config)
-
+    
         # Exchange adapter and symbol for live trading
         self.exchange_adapter = exchange_adapter
         self.symbol = symbol
+        
+        if self.exchange_adapter:
+            # Live trading
+            self.get_symbol_params = lambda: {
+                "price_precision": self.exchange_adapter.price_precision,
+                "quantity_precision": self.exchange_adapter.quantity_precision,
+                "min_quantity": self.exchange_adapter.min_quantity,
+                "min_notional": self.exchange_adapter.min_notional,
+            }
+        else:
+            # Backtesting
+            self.get_symbol_params = lambda: app_config.exchange.get_symbol_params(self.symbol)
+
+        # --- Initialize TradeCalculationHelpers ---
+        self.trade_calculation_helpers = TradeCalculationHelpers(app_config=app_config, get_symbol_params_func=self.get_symbol_params)
 
         self.volatility_regime_col_name = self.trade_calculation_helpers.volatility_regime_col_name
         self.atr_vol_adj_col_name = self.trade_calculation_helpers.atr_vol_adj_col_name
 
         self.logger.info("TradeExecutionEngine initialized with configurations and helpers.")
+        
 
     # ====================================================================
     # --- Public API for Trade Management (Called by Backtester/TradingBot) ---
@@ -88,7 +102,7 @@ class TradeExecutionEngine:
 
         Returns None if the trade does not pass filters or cannot be afforded.
         """
-        self.logger.debug(f"Attempting to calculate entry for signal {signal} at {current_price:.{self.exchange_config.price_precision}f} on bar index {current_bar_index}")
+        self.logger.debug(f"Attempting to calculate entry for signal {signal} at {current_price:.{self.get_symbol_params()['price_precision']}f} on bar index {current_bar_index}")
 
         # 1. Input Validation: Basic sanity checks
         if signal == 0:
@@ -150,7 +164,7 @@ class TradeExecutionEngine:
             liquidation_price=liquidation_price
         )
         if not is_sl_safe:
-            self.logger.warning(f"Stop loss ({stop_loss_price:.{self.exchange_config.price_precision}f}) is too close to liquidation price ({liquidation_price:.{self.exchange_config.price_precision}f}). Blocking entry.")
+            self.logger.warning(f"Stop loss ({stop_loss_price:.{self.get_symbol_params()['price_precision']}f}) is too close to liquidation price ({liquidation_price:.{self.get_symbol_params()['price_precision']}f}). Blocking entry.")
             return None
 
         adjusted_quantity, notional_value = self.trade_calculation_helpers.calculate_position_size(
@@ -250,12 +264,12 @@ class TradeExecutionEngine:
         if pd.notna(liq_price) and liq_price > FLOAT_EPSILON:
             if trade_direction_int == 1:
                 if current_low <= liq_price + FLOAT_EPSILON:
-                    self.logger.warning(f"Long position liquidated at {liq_price:.{self.exchange_config.price_precision}f} (current_low: {current_low:.{self.exchange_config.price_precision}f}).")
+                    self.logger.warning(f"Long position liquidated at {liq_price:.{self.get_symbol_params()['price_precision']}f} (current_low: {current_low:.{self.get_symbol_params()['price_precision']}f}).")
                     exit_price_candidate = liq_price
                     return True, 'liquidation', self.trade_calculation_helpers._round_price(exit_price_candidate)
             elif trade_direction_int == -1:
                 if current_high >= liq_price - FLOAT_EPSILON:
-                    self.logger.warning(f"Short position liquidated at {liq_price:.{self.exchange_config.price_precision}f} (current_high: {current_high:.{self.exchange_config.price_precision}f}).")
+                    self.logger.warning(f"Short position liquidated at {liq_price:.{self.get_symbol_params()['price_precision']}f} (current_high: {current_high:.{self.get_symbol_params()['price_precision']}f}).")
                     exit_price_candidate = liq_price
                     return True, 'liquidation', self.trade_calculation_helpers._round_price(exit_price_candidate)
 
@@ -263,12 +277,12 @@ class TradeExecutionEngine:
         if pd.notna(sl_price) and sl_price > FLOAT_EPSILON:
             if trade_direction_int == 1:
                 if current_low <= sl_price + FLOAT_EPSILON:
-                    self.logger.info(f"Long position Stop Loss hit at {sl_price:.{self.exchange_config.price_precision}f} (current_low: {current_low:.{self.exchange_config.price_precision}f}).")
+                    self.logger.info(f"Long position Stop Loss hit at {sl_price:.{self.get_symbol_params()['price_precision']}f} (current_low: {current_low:.{self.get_symbol_params()['price_precision']}f}).")
                     exit_price_candidate = sl_price
                     return True, 'stop_loss', self.trade_calculation_helpers._round_price(exit_price_candidate)
             elif trade_direction_int == -1:
                 if current_high >= sl_price - FLOAT_EPSILON:
-                    self.logger.info(f"Short position Stop Loss hit at {sl_price:.{self.exchange_config.price_precision}f} (current_high: {current_high:.{self.exchange_config.price_precision}f}).")
+                    self.logger.info(f"Short position Stop Loss hit at {sl_price:.{self.get_symbol_params()['price_precision']}f} (current_high: {current_high:.{self.get_symbol_params()['price_precision']}f}).")
                     exit_price_candidate = sl_price
                     return True, 'stop_loss', self.trade_calculation_helpers._round_price(exit_price_candidate)
 
@@ -276,12 +290,12 @@ class TradeExecutionEngine:
         if pd.notna(tp_price) and tp_price > FLOAT_EPSILON:
             if trade_direction_int == 1:
                 if current_high >= tp_price - FLOAT_EPSILON:
-                    self.logger.info(f"Long position Take Profit hit at {tp_price:.{self.exchange_config.price_precision}f} (current_high: {current_high:.{self.exchange_config.price_precision}f}).")
+                    self.logger.info(f"Long position Take Profit hit at {tp_price:.{self.get_symbol_params()['price_precision']}f} (current_high: {current_high:.{self.get_symbol_params()['price_precision']}f}).")
                     exit_price_candidate = tp_price
                     return True, 'take_profit', self.trade_calculation_helpers._round_price(exit_price_candidate)
             elif trade_direction_int == -1:
                 if current_low <= tp_price + FLOAT_EPSILON:
-                    self.logger.info(f"Short position Take Profit hit at {tp_price:.{self.exchange_config.price_precision}f} (current_low: {current_low:.{self.exchange_config.price_precision}f}).")
+                    self.logger.info(f"Short position Take Profit hit at {tp_price:.{self.get_symbol_params()['price_precision']}f} (current_low: {current_low:.{self.get_symbol_params()['price_precision']}f}).")
                     exit_price_candidate = tp_price
                     return True, 'take_profit', self.trade_calculation_helpers._round_price(exit_price_candidate)
 
@@ -435,7 +449,8 @@ class TradeExecutionEngine:
             'entry_order_id': entry_confirmation['orderId'],
             'sl_order_id': sl_order['orderId'],
             'tp_order_id': tp_order['orderId'],
-            'liquidation_price': liq_price
+            'liquidation_price': liq_price,
+            'id': str(entry_confirmation['orderId']) 
         })
         self.logger.info(f"Position reconciled with exchange data: ID {final_position.get('id', '?')}")
         return final_position

@@ -1,13 +1,28 @@
-# config/exchange.py
-
 from dataclasses import dataclass, field
 from typing import Dict, Any, Literal
 import os
 
+SYMBOL_PARAMS: Dict[str, Dict[str, Any]] = {
+    "BTCUSDT": {
+        "min_notional": 5.0,
+        "min_quantity": 0.001,
+        "price_precision": 2,
+        "quantity_precision": 3
+    },
+    "ADAUSDT": {
+        "min_notional": 1.0,
+        "min_quantity": 1.0,
+        "price_precision": 4,
+        "quantity_precision": 1
+    },
+    # Add more pairs as needed
+}
+
 @dataclass
 class ExchangeConfig:
     """
-    Exchange connection and order settings.
+    Exchange connection and order settings. 
+    Store all static configuration related to connecting to an exchange (e.g. Binance).
     """
     exchange: Literal['binance'] = 'binance'
     testnet: bool = True
@@ -25,10 +40,11 @@ class ExchangeConfig:
     timeout: int = 30000
     tld: Literal['com', 'us'] = field(default_factory=lambda: os.getenv('BINANCE_TLD', 'com'))
 
-    price_precision: int = 2 # Price precision for orders to retrieve from your exchange depending on the market
-    quantity_precision: int = 3 # Quantity precision for orders to retrieve from your exchange depending on the market
-    min_quantity: float = 0.001 # Minimum quantity for orders to retrieve from your exchange depending on the market
-    min_notional: float = 5.0 # Minimum notional for orders to retrieve from your exchange depending on the market
+    def get_symbol_params(self, symbol: str) -> Dict[str, Any]:
+        """Retrieve symbol-specific parameters or raise error if missing."""
+        params = SYMBOL_PARAMS.get(symbol)
+        if params is None:
+            raise ValueError(f"Symbol parameters not found for {symbol}. Please add them to SYMBOL_PARAMS.")
+        return params
 
-# Default config instance
 DEFAULT_EXCHANGE_CONFIG = ExchangeConfig()

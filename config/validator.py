@@ -109,14 +109,7 @@ def validate_exchange_config(config):
         raise ValueError("timeout must be positive.")
     if config.tld not in ['com', 'us']:
         raise ValueError("tld must be 'com' or 'us'.")
-    if config.price_precision < 0:
-        raise ValueError("price_precision must be >= 0.")
-    if config.quantity_precision < 0:
-        raise ValueError("quantity_precision must be >= 0.")
-    if config.min_quantity < 0:
-        raise ValueError("min_quantity must be >= 0.")
-    if config.min_notional < 0:
-        raise ValueError("min_notional must be >= 0.")
+
 
 def validate_notifier_config(config):
     tg = config.telegram

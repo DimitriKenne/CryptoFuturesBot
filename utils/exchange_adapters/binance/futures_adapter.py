@@ -88,6 +88,7 @@ class BinanceFuturesAdapter(ExchangeInterface):
         # Pass None for client initially, then set it properly in async_setup
         self.exchange_info_helper = BinanceExchangeInfoHelper(
             client=None,
+            symbol=self.symbol,
             exchange_config=self.app_config.exchange,
             logger=self.logger
         )
@@ -100,10 +101,10 @@ class BinanceFuturesAdapter(ExchangeInterface):
 
         self.logger.info(f"BinanceFuturesAdapter initialized for {self.symbol} (Testnet: {self.app_config.exchange.testnet})")
         # These will be updated from exchange_info_helper during async_setup
-        self.price_precision = self.app_config.exchange.price_precision
-        self.quantity_precision = self.app_config.exchange.quantity_precision
-        self.min_quantity = self.app_config.exchange.min_quantity
-        self.min_notional = self.app_config.exchange.min_notional
+        self.price_precision = self.app_config.exchange.get_symbol_params(self.symbol).get("price_precision", 2)
+        self.quantity_precision = self.app_config.exchange.get_symbol_params(self.symbol).get("quantity_precision", 3)
+        self.min_quantity = self.app_config.exchange.get_symbol_params(self.symbol).get("min_quantity", 0.001)
+        self.min_notional = self.app_config.exchange.get_symbol_params(self.symbol).get("min_notional", 5.0)
 
 
     async def async_setup(self):
