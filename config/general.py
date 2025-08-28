@@ -7,9 +7,9 @@ class GeneralConfig:
     """
     Defines general configuration parameters for the project.
     """
-    random_seed: int = 42
+    random_seed: int = 123
     n_processors: int = -1 # Number of CPU cores to use. -1 for all available.
-    hyperparameter_tuning_n_iter: int = 50 # Number of parameter settings that are sampled
+    hyperparameter_tuning_n_iter: int = 10 # Number of parameter settings that are sampled
     hyperparameter_tuning_cv_folds: int = 5 # Number of cross-validation splits
     data_granularity_minutes: int = 5 # Default data granularity in minutes (e.g., 5 for 5m candles, 60 for 1h candles)
     historical_data_lookback: int = 1000 # number of historical data points required for trading

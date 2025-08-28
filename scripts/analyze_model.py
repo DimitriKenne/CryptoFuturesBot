@@ -173,6 +173,59 @@ def plot_calibration_curve(y_test: pd.Series, y_proba: pd.DataFrame, classes: li
     dm.save_model_plot(plt.gcf(), 'calibration_curve', model_type, symbol, interval)
     plt.close()
 
+def plot_probability_histograms(y_true: pd.Series, y_proba: np.ndarray, classes: list, dm: DataManager, model_type: str, symbol: str, interval: str):
+    """
+    Plots histograms of predicted probabilities for each class, separated by true label.
+    """
+    if not PLOT_AVAILABLE:
+        logger.warning("Skipping probability histograms plot: Plotting libraries not available.")
+        return
+    if y_true.empty or y_proba.shape[0] == 0 or y_proba.shape[1] != len(classes):
+         logger.warning("Insufficient data or incorrect shape for probability histogram plotting.")
+         return
+
+    y_true_df = y_true.to_frame(name='true_label')
+    proba_df = pd.DataFrame(y_proba, index=y_true_df.index, columns=classes)
+    merged_df = pd.concat([y_true_df, proba_df], axis=1)
+
+    if merged_df.empty:
+        logger.warning("Merged data for probability histogram is empty.")
+        return
+
+    fig, axes = plt.subplots(1, len(classes), figsize=(6 * len(classes), 5), sharey=True)
+    if len(classes) == 1:
+         axes = [axes]
+
+    for i, class_label in enumerate(classes):
+        proba_column = class_label
+        if proba_column not in merged_df.columns:
+             logger.warning(f"Probability column for class {class_label} not found in DataFrame. Skipping plot for this class.")
+             continue
+
+        subset_data = merged_df[proba_column].dropna()
+        if subset_data.empty:
+             logger.warning(f"Skipping probability histogram for class {class_label}: No non-NaN probability data.")
+             axes[i].set_title(f'Probabilities for Class {class_label}\n(No Data)')
+             axes[i].set_xlabel(f'Predicted Probability ({class_label})')
+             axes[i].set_ylabel('Density')
+             continue
+
+        sns.histplot(data=merged_df, x=proba_column, hue='true_label', ax=axes[i], stat='density', common_norm=False, bins=30, palette='viridis')
+        axes[i].set_title(f'Probabilities for Class {class_label}')
+        axes[i].set_xlabel(f'Predicted Probability ({class_label})')
+        axes[i].set_ylabel('Density')
+        if axes[i].get_legend() is None:
+             axes[i].legend(title='True Label')
+        else:
+             axes[i].get_legend().set_title('True Label')
+
+    # Use the passed symbol, interval, model_key for the main title
+    fig.suptitle(f'Prediction Probability Distribution\n{symbol.upper()} {interval} ({model_type})', y=1.02)
+    plt.tight_layout()
+    dm.save_model_plot(plt.gcf(), 'probability_histograms', model_type, symbol, interval)
+    plt.close()
+
+
 @log_analysis_start_end
 def load_and_prepare_data(symbol: str, interval: str, train_ratio: float, dm: DataManager, feature_columns_original: List[str]) -> Tuple[pd.DataFrame, pd.Series]:
     """Loads and splits the test dataset for analysis."""
@@ -292,6 +345,8 @@ def analyse_model_pipeline(symbol: str, interval: str, model_type: str, train_ra
             plot_roc_auc(y_test_eval, y_proba_df, labels, dm, model_type, symbol, interval)
             plot_precision_recall(y_test_eval, y_proba_df, labels, dm, model_type, symbol, interval)
             plot_calibration_curve(y_test_eval, y_proba_df, labels, dm, model_type, symbol, interval)
+             # ---- Probability Histograms integration ----
+            plot_probability_histograms(y_test_eval, y_proba_df.to_numpy(), labels, dm, model_type, symbol, interval)
             logger.info("Additional plots generated successfully.")
         else:
             logger.warning("Probability predictions not available, skipping ROC, Precision-Recall, and Calibration plots.")

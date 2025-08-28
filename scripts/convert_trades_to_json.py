@@ -155,7 +155,7 @@ def main():
     dm = DataManager()
 
     # --- Load OHLCV data ---
-    ohlcv_df = dm.load_data(symbol=args.symbol, interval=args.interval, data_type='raw')
+    ohlcv_df = dm.load_dataframe(symbol=args.symbol, interval=args.interval, data_type='raw')
     if ohlcv_df is None or ohlcv_df.empty:
         logger.error("Failed to load OHLCV data. Aborting.")
         sys.exit(1)

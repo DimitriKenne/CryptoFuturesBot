@@ -26,17 +26,16 @@ class XGBoostParams:
     objective: str = 'multi:softmax'
     num_class: int = 3
     eval_metric: str = 'mlogloss'
-    n_estimators: int = 300
-    learning_rate: float = 0.13
-    max_depth: int = 7
-    subsample: float = 0.7
-    colsample_bytree: float = 0.7
+    n_estimators: int = 480
+    learning_rate: float = 0.001
+    max_depth: int = 6
+    subsample: float = 0.74
+    colsample_bytree: float = 0.72
     enable_categorical: bool = True
     n_jobs: int = -1
     tree_method: str = 'hist'
     early_stopping_rounds: Optional[int] = None
-    class_balancing: Optional[Union[str, Dict[str, Any]]] = None
-
+    class_balancing: Optional[Union[str, Dict[str, Any]]] = 'undersampling'
 @dataclass
 class RandomForestParams:
     n_estimators: int = 300
@@ -50,22 +49,22 @@ class RandomForestParams:
 
 @dataclass
 class LSTMParams:
-    sequence_length_bars: int = 3 # Centralized sequence length for LSTM
+    sequence_length_bars: int = 5 # Centralized sequence length for LSTM
     n_features: Optional[int] = None
-    units_per_layer: int = 30
-    n_layers: int = 3
+    units_per_layer: int = 32
+    n_layers: int = 2
     epochs: int = 300
     batch_size: int = 32
-    validation_split: float = 0.2
+    validation_split: float = 0.15
     dropout_rate: float = 0.3
-    learning_rate: float = 0.1
+    learning_rate: float = 0.001
     clipnorm: Optional[float] = 1.0
     clipvalue: Optional[float] = None
     early_stopping_patience: Optional[int] = 50
     reduce_lr_on_plateau_factor: Optional[float] = 0.5
     reduce_lr_on_plateau_patience: Optional[int] = 25
     class_balancing: Optional[Union[str, Dict[str, Any]]] = None
-    dense_units: Optional[int] = 15
+    dense_units: Optional[int] = 32
 
 @dataclass
 class XGBoostTuningParams:
@@ -98,7 +97,7 @@ class ModelConfig:
     model_type: Literal['xgboost', 'random_forest', 'lstm'] = 'xgboost'
     features_to_use: Optional[List[str]] = None
     label_column: str = 'label'
-    train_test_split_ratio: float = 0.8
+    train_test_split_ratio: float = 0.75
     scaler_type: Optional[Literal['standard', 'minmax']] = 'standard'
     
     # --- MODIFIED/ADDED SECTION ---

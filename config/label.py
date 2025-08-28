@@ -16,17 +16,17 @@ class LabelingStrategy1Config:
 @dataclass
 class LabelingStrategy2Config:
     """Net Forward Return Quantile labeling. All '_pct' fields are percentages (0-100)."""
-    quantile_threshold_long_pct: float = 50.0
-    quantile_threshold_short_pct: float = 50.0
-    future_return_window: int = 70
+    quantile_threshold_long_pct: float = 25.0
+    quantile_threshold_short_pct: float = 25.0
+    future_return_window: int = 300
     # return_type: Literal['log_returns', 'simple_returns'] = 'simple_returns'
 
 @dataclass
 class LabelingStrategy3Config:
     """Future Range Dominance labeling. All '_pct' fields are percentages (0-100)."""
     future_return_window: int = 150
-    long_ratio_quantile_pct: float = 75.0
-    short_ratio_quantile_pct: float = 75.0
+    long_ratio_quantile_pct: float = 50.0
+    short_ratio_quantile_pct: float = 50.0
     min_profit_threshold_pct: float = 0.5     # e.g. 0.5 for 0.5%
 
 @dataclass
@@ -65,7 +65,7 @@ class LabelConfig:
     labeling_strategy_4: LabelingStrategy4Config = field(default_factory=LabelingStrategy4Config)
 
     trading_fee_pct: float = 0.05             # e.g. 0.05 for 0.05%
-    slippage_tolerance_pct: float = 0.05      # e.g. 0.05 for 0.05%
+    slippage_tolerance_pct: float = 0.01      # e.g. 0.01 for 0.01%
     analysis_future_horizons: List[int] = field(default_factory=lambda: [10, 30, 60, 100, 150])
 
 # Default configuration instance

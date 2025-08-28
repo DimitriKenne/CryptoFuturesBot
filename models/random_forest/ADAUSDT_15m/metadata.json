@@ -1,0 +1,105 @@
+{
+    "model_type": "random_forest",
+    "feature_columns_processed": [
+        "num__atr_50",
+        "num__atr_20"
+    ],
+    "feature_columns_original": [
+        "atr_50",
+        "atr_20"
+    ],
+    "label_map": {
+        "-1": 0,
+        "0": 1,
+        "1": 2
+    },
+    "inverse_label_map": {
+        "0": -1,
+        "1": 0,
+        "2": 1
+    },
+    "classes": [
+        -1,
+        0,
+        1
+    ],
+    "model_config": {
+        "AVAILABLE_MODEL_TYPES": {
+            "xgboost": "XGBoost Classifier",
+            "random_forest": "Random Forest Classifier",
+            "lstm": "LSTM Neural Network"
+        },
+        "model_type": "random_forest",
+        "features_to_use": [
+            "atr_50",
+            "atr_20"
+        ],
+        "label_column": "label",
+        "train_test_split_ratio": 0.7,
+        "scaler_type": "standard",
+        "pca_enabled": false,
+        "pca_n_components": 0.95,
+        "tuning_scoring_metric": "f1_macro",
+        "TF_AVAILABLE": true,
+        "tf": "<module 'tensorflow' from 'C:\\\\Users\\\\dimit\\\\AppData\\\\Local\\\\Programs\\\\Python\\\\Python312\\\\Lib\\\\site-packages\\\\tensorflow\\\\__init__.py'>",
+        "xgboost_params": {
+            "objective": "multi:softmax",
+            "num_class": 3,
+            "eval_metric": "mlogloss",
+            "n_estimators": 300,
+            "learning_rate": 0.13,
+            "max_depth": 7,
+            "subsample": 0.7,
+            "colsample_bytree": 0.7,
+            "enable_categorical": true,
+            "n_jobs": -1,
+            "tree_method": "hist",
+            "early_stopping_rounds": null,
+            "class_balancing": null
+        },
+        "random_forest_params": {
+            "n_estimators": 300,
+            "max_depth": 20,
+            "min_samples_leaf": 5,
+            "min_samples_split": 10,
+            "random_state": 42,
+            "n_jobs": -1,
+            "oob_score": true,
+            "class_balancing": null
+        },
+        "lstm_params": {
+            "sequence_length_bars": 3,
+            "n_features": null,
+            "units_per_layer": 30,
+            "n_layers": 3,
+            "epochs": 300,
+            "batch_size": 32,
+            "validation_split": 0.2,
+            "dropout_rate": 0.3,
+            "learning_rate": 0.1,
+            "clipnorm": 1.0,
+            "clipvalue": null,
+            "early_stopping_patience": 50,
+            "reduce_lr_on_plateau_factor": 0.5,
+            "reduce_lr_on_plateau_patience": 25,
+            "class_balancing": null,
+            "dense_units": 15
+        },
+        "xgboost_tuning_params": {
+            "n_estimators": "<scipy.stats._distn_infrastructure.rv_discrete_frozen object at 0x0000021A30F1C860>",
+            "learning_rate": "<scipy.stats._distn_infrastructure.rv_continuous_frozen object at 0x0000021A30F1E4B0>",
+            "max_depth": "<scipy.stats._distn_infrastructure.rv_discrete_frozen object at 0x0000021A31055B80>",
+            "subsample": "<scipy.stats._distn_infrastructure.rv_continuous_frozen object at 0x0000021A31056750>",
+            "colsample_bytree": "<scipy.stats._distn_infrastructure.rv_continuous_frozen object at 0x0000021A31057260>"
+        },
+        "random_forest_tuning_params": {
+            "n_estimators": "<scipy.stats._distn_infrastructure.rv_discrete_frozen object at 0x0000021A310568A0>",
+            "max_depth": "<scipy.stats._distn_infrastructure.rv_discrete_frozen object at 0x0000021A31057D70>",
+            "min_samples_leaf": "<scipy.stats._distn_infrastructure.rv_discrete_frozen object at 0x0000021A31057050>",
+            "min_samples_split": "<scipy.stats._distn_infrastructure.rv_discrete_frozen object at 0x0000021A31056AB0>"
+        }
+    },
+    "training_history": null,
+    "save_timestamp": "2025-08-28 11:48:06",
+    "saved_by": "Dimitri"
+}

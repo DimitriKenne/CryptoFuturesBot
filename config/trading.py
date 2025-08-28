@@ -6,7 +6,7 @@ from typing import Dict, Any, Optional, Literal
 class RiskConfig:
     initial_capital: float = 5000.0
     risk_per_trade_pct: float = 1.0 # Percentage of capital to risk per trade
-    leverage: int = 1
+    leverage: int = 10
 
 @dataclass
 class TradeExecutionConfig:
@@ -18,8 +18,8 @@ class TradeExecutionConfig:
 @dataclass
 class EntryFilterConfig:
     confidence_filter_enabled: bool = True
-    confidence_threshold_long_pct: float = 50 # Confidence threshold for long entries (percentage)
-    confidence_threshold_short_pct: float = 50 # Confidence threshold for short entries (percentage)
+    confidence_threshold_long_pct: float = 35 # Confidence threshold for long entries (percentage)
+    confidence_threshold_short_pct: float = 35 # Confidence threshold for short entries (percentage)
     volatility_regime_filter_enabled: bool = False
     trend_filter_enabled: bool = False
     trend_filter_ema_period: int = 20
@@ -35,12 +35,12 @@ class VolatilityRegimeConfig:
 class SLTPConfig:
     enabled: bool = False # Enable dynamic SLTP strategy
     volatility_window_bars: int = 20 # Window for ATR calculation
-    fixed_take_profit_pct: float = 8.0 # Fixed Take Profit as a percentage
+    fixed_take_profit_pct: float = 6.0 # Fixed Take Profit as a percentage
     fixed_stop_loss_pct: float = 3.0 # Fixed Stop Loss as a percentage
     alpha_take_profit: float = 14.0 # Multiplier for ATR-based TP
     alpha_stop_loss: float = 5.0 # Multiplier for ATR-based SL
     min_sl_tp_pct: float = 1.0 # Minimum SL/TP distance as a percentage
-    max_holding_period_bars_default: Optional[int] = None # Default max holding if no regime applies
+    max_holding_period_bars_default: Optional[int] = 150 # Default max holding if no regime applies
 
 
 @dataclass
