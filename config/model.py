@@ -23,11 +23,11 @@ except ImportError:
 
 @dataclass
 class XGBoostParams:
-    objective: str = 'multi:softprob'
+    objective: str = 'multi:softmax'
     num_class: int = 3
     eval_metric: str = 'mlogloss'
-    n_estimators: int = 500
-    learning_rate: float = 0.05
+    n_estimators: int = 300
+    learning_rate: float = 0.13
     max_depth: int = 7
     subsample: float = 0.7
     colsample_bytree: float = 0.7
@@ -50,22 +50,22 @@ class RandomForestParams:
 
 @dataclass
 class LSTMParams:
-    sequence_length_bars: int = 5 # Centralized sequence length for LSTM
+    sequence_length_bars: int = 3 # Centralized sequence length for LSTM
     n_features: Optional[int] = None
-    units_per_layer: int = 50
-    n_layers: int = 2
-    epochs: int = 100
+    units_per_layer: int = 30
+    n_layers: int = 3
+    epochs: int = 300
     batch_size: int = 32
     validation_split: float = 0.2
-    dropout_rate: float = 0.2
-    learning_rate: float = 0.0001
+    dropout_rate: float = 0.3
+    learning_rate: float = 0.1
     clipnorm: Optional[float] = 1.0
     clipvalue: Optional[float] = None
-    early_stopping_patience: Optional[int] = 30
-    reduce_lr_on_plateau_factor: Optional[float] = 0.1
-    reduce_lr_on_plateau_patience: Optional[int] = 5
+    early_stopping_patience: Optional[int] = 50
+    reduce_lr_on_plateau_factor: Optional[float] = 0.5
+    reduce_lr_on_plateau_patience: Optional[int] = 25
     class_balancing: Optional[Union[str, Dict[str, Any]]] = None
-    dense_units: Optional[int] = 2
+    dense_units: Optional[int] = 15
 
 @dataclass
 class XGBoostTuningParams:

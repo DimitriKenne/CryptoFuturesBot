@@ -117,11 +117,14 @@ class ModelTrainer:
         self.inverse_label_map: Dict[int, int] = {0: -1, 1: 0, 2: 1}
         self.classes: np.ndarray = np.array([-1, 0, 1])
 
+        # UPDATED: Pass class_balancing_strategy and random_seed to PreprocessorBuilder
         self.preprocessor_builder = PreprocessorBuilder(
             scaler_type=self._model_config.scaler_type,
             pca_enabled=self._model_config.pca_enabled,
             pca_n_components=self._model_config.pca_n_components,
-            features_to_use=self.features_to_use
+            features_to_use=self.features_to_use,
+            class_balancing_strategy=self._model_config.lstm_params.class_balancing if self.model_type == 'lstm' else None, # Only for LSTM
+            random_seed=app_config.general.random_seed
         )
         self.model_builder = ModelBuilder(tf_available=TF_AVAILABLE, tf_module=tf)
 
@@ -145,7 +148,12 @@ class ModelTrainer:
 
         self.logger.info(f"Starting training for {self.model_type} model...")
         self.feature_columns_original = X_train.columns.tolist()
-        self.preprocessor = self.preprocessor_builder.build_and_fit(X_train)
+
+        # UPDATED: Pass y_train to build_and_fit for class balancing logic
+        self.preprocessor = self.preprocessor_builder.build_and_fit(
+            X_train,
+            y=y_train.map(self.label_map) if self.preprocessor_builder.class_balancing_strategy else None
+        )
         self.feature_columns_processed = self.preprocessor_builder.processed_feature_names
 
         if not self.feature_columns_processed:
@@ -161,7 +169,7 @@ class ModelTrainer:
     def _train_sklearn(self, X_train, y_train, X_val, y_val):
         steps = [('preprocessor', self.preprocessor)]
         model_params = getattr(self._model_config, f"{self.model_type}_params")
-        
+
         self.model = self.model_builder.build_model(
             model_type=self.model_type,
             model_params=model_params,
@@ -174,10 +182,10 @@ class ModelTrainer:
             steps.append(('sampler', RandomUnderSampler(random_state=app_config.general.random_seed)))
         elif balancing_strategy == 'oversampling':
             steps.append(('sampler', SMOTE(random_state=app_config.general.random_seed)))
-        
+
         steps.append(('model', self.model))
         self.pipeline = Pipeline(steps)
-        
+
         fit_kwargs = {}
         if self.model_type == 'xgboost' and model_params.early_stopping_rounds is not None:
             if X_val is not None and not X_val.empty and y_val is not None and not y_val.empty:
@@ -192,12 +200,19 @@ class ModelTrainer:
 
     def _train_lstm(self, X_train, y_train, X_val, y_val, symbol, interval):
         lstm_params: LSTMParams = self._model_config.lstm_params
-        
+
         # --- IMPROVED LOGGING: Confirm dense layer configuration ---
         if lstm_params.dense_units and lstm_params.dense_units > 0:
             self.logger.info(f"LSTM architecture will include a final dense layer with {lstm_params.dense_units} units.")
         else:
             self.logger.info("LSTM architecture will not include an additional final dense layer.")
+
+        # Preprocess features (scaling, PCA) - now only transforms X
+        X_train_scaled = self.preprocessor_builder.transform(X_train)
+        y_train_mapped = y_train.map(self.label_map).values
+
+        # UPDATED: Use preprocessor_builder's fit_resample for class balancing
+        X_train_resampled, y_train_resampled = self.preprocessor_builder.fit_resample(X_train_scaled, y_train_mapped)
 
         self.model = self.model_builder.build_model(
             model_type='lstm',
@@ -207,12 +222,12 @@ class ModelTrainer:
             general_config_n_processors=app_config.general.n_processors
         )
 
-        X_train_scaled = self.preprocessor_builder.transform(X_train)
-        y_train_mapped = y_train.map(self.label_map).values
-        X_train_seq, y_train_seq_one_hot = self.data_sequencer.create_sequences(X_train_scaled, y_train_mapped)
+        # Create sequences from the potentially resampled training data
+        X_train_seq, y_train_seq_one_hot = self.data_sequencer.create_sequences(X_train_resampled, y_train_resampled)
 
         val_data = None
         if X_val is not None and not X_val.empty and y_val is not None and not y_val.empty:
+            # IMPORTANT: Validation data is NOT resampled to prevent data leakage.
             X_val_scaled = self.preprocessor_builder.transform(X_val)
             y_val_mapped = y_val.map(self.label_map).values
             X_val_seq, y_val_seq_one_hot = self.data_sequencer.create_sequences(X_val_scaled, y_val_mapped)
@@ -222,8 +237,8 @@ class ModelTrainer:
         callbacks = []
         monitor_metric = 'val_loss' if val_data or (lstm_params.validation_split > 0) else 'loss'
         if lstm_params.early_stopping_patience is not None and lstm_params.early_stopping_patience > 0:
-            callbacks.append(tf.keras.callbacks.EarlyStopping(monitor=monitor_metric, patience=lstm_params.early_stopping_patience, restore_best_weights=False))
-        
+            callbacks.append(tf.keras.callbacks.EarlyStopping(monitor=monitor_metric, patience=lstm_params.early_stopping_patience, restore_best_weights=True))
+
         if symbol and interval:
             model_dir = self.dm.get_model_dir(self.model_type, symbol, interval)
             checkpoint_path = model_dir / PATH_CONFIG['patterns']['model_keras']
@@ -244,18 +259,18 @@ class ModelTrainer:
         # --- IMPROVED LOGGING: Post-training analysis ---
         self.logger.info("--- LSTM Training Summary ---")
         history_data = history.history
-        
+
         # Find the best epoch
         best_epoch_index = np.argmin(history_data[monitor_metric])
         best_epoch_num = best_epoch_index + 1
         best_score = history_data[monitor_metric][best_epoch_index]
         self.logger.info(f"Best model found at epoch {best_epoch_num} with {monitor_metric}: {best_score:.4f}")
-        
+
         # Log final epoch metrics for overfitting diagnosis
         final_epoch_index = len(history_data['loss']) - 1
         final_train_loss = history_data['loss'][final_epoch_index]
         final_train_acc = history_data.get('accuracy', [0])[final_epoch_index]
-        
+
         log_message = (
             f"Final Epoch ({final_epoch_index + 1}) Metrics:\n"
             f"  Training Loss:   {final_train_loss:.4f}\n"
@@ -287,7 +302,7 @@ class ModelTrainer:
         if self.model_type == 'lstm':
             if self.model is None or self.preprocessor is None or self.data_sequencer is None:
                 raise RuntimeError("LSTM model or components not available for evaluation.")
-            
+
             X_test_scaled = self.preprocessor_builder.transform(X_test)
             X_test_seq, y_test_seq_one_hot = self.data_sequencer.create_sequences(X_test_scaled, y_test_mapped)
 
@@ -309,23 +324,23 @@ class ModelTrainer:
         else: # Scikit-learn models
             if self.pipeline is None:
                 raise RuntimeError("Model pipeline not available for evaluation.")
-            
+
             y_pred_mapped = self.pipeline.predict(X_test)
             y_pred_original = pd.Series(y_pred_mapped).map(self.inverse_label_map).values
-            
+
             results = {
                 "overall_accuracy": accuracy_score(y_test.values, y_pred_original),
                 "balanced_accuracy": balanced_accuracy_score(y_test.values, y_pred_original),
                 "classification_report": classification_report(y_test.values, y_pred_original, labels=self.classes, zero_division=0, output_dict=True),
                 "confusion_matrix": confusion_matrix(y_test.values, y_pred_original, labels=self.classes)
             }
-        
+
         # --- IMPROVED LOGGING: Print evaluation results ---
         self.logger.info("--- Test Set Evaluation Results ---")
         self.logger.info(f"Balanced Accuracy: {results['balanced_accuracy']:.4f}")
         if 'overall_accuracy' in results: self.logger.info(f"Overall Accuracy: {results['overall_accuracy']:.4f}")
         if 'loss' in results: self.logger.info(f"Loss: {results['loss']:.4f}")
-        
+
         report_str = classification_report(
             y_test_aligned_original if self.model_type == 'lstm' else y_test.values,
             y_pred_original,
@@ -333,7 +348,7 @@ class ModelTrainer:
             zero_division=0
         )
         self.logger.info(f"Classification Report:\n{report_str}")
-        
+
         cm_df = pd.DataFrame(results['confusion_matrix'], index=[f"True_{c}" for c in self.classes], columns=[f"Pred_{c}" for c in self.classes])
         self.logger.info(f"Confusion Matrix:\n{cm_df}")
         self.logger.info("---------------------------------")
@@ -354,7 +369,7 @@ class ModelTrainer:
         if self.model_type == 'lstm':
             if self.model is None or self.preprocessor is None or self.data_sequencer is None:
                 raise RuntimeError("LSTM model or components not available for prediction.")
-            
+
             X_scaled = self.preprocessor_builder.transform(X)
             X_sequences, _ = self.data_sequencer.create_sequences(X_scaled, np.zeros(len(X_scaled)))
 
@@ -364,12 +379,12 @@ class ModelTrainer:
             y_pred_mapped = np.argmax(self.model.predict(X_sequences), axis=1)
             y_pred_values = pd.Series(y_pred_mapped).map(self.inverse_label_map).values
             pred_index = X.index[self.sequence_length - 1:]
-            
+
             return pd.Series(y_pred_values, index=pred_index, name='predictions').reindex(X.index).astype(Int8Dtype())
         else: # Scikit-learn models
             if self.pipeline is None:
                 raise RuntimeError("Model pipeline not available for prediction.")
-            
+
             y_pred_mapped = self.pipeline.predict(X)
             return pd.Series(pd.Series(y_pred_mapped).map(self.inverse_label_map).values, index=X.index, dtype=Int8Dtype())
 
@@ -385,22 +400,22 @@ class ModelTrainer:
         if self.model_type == 'lstm':
             if self.model is None or self.preprocessor is None or self.data_sequencer is None:
                 raise RuntimeError("LSTM model or components not available for probability prediction.")
-            
+
             X_scaled = self.preprocessor_builder.transform(X)
             X_sequences, _ = self.data_sequencer.create_sequences(X_scaled, np.zeros(len(X_scaled)))
-            
+
             if X_sequences.shape[0] == 0:
                 return None
-            
+
             y_pred_proba = self.model.predict(X_sequences)
             pred_index = X.index[self.sequence_length - 1:]
-            
+
             return pd.DataFrame(y_pred_proba, index=pred_index, columns=['proba_-1', 'proba_0', 'proba_1']).reindex(X.index)
         else: # Scikit-learn models
             if self.pipeline is None or not hasattr(self.pipeline, 'predict_proba'):
                 self.logger.info(f"Model type '{self.model_type}' or its pipeline does not support predict_proba.")
                 return None
-            
+
             y_pred_proba = self.pipeline.predict_proba(X)
             return pd.DataFrame(y_pred_proba, index=X.index, columns=['proba_-1', 'proba_0', 'proba_1'])
 
@@ -408,13 +423,13 @@ class ModelTrainer:
         """Saves the trained model and all related artifacts to a structured directory."""
         if self.model is None and self.pipeline is None:
             raise RuntimeError("No model or pipeline has been trained to save.")
-        
+
         self.logger.info(f"Saving trained {self.model_type} model and artifacts for {symbol.upper()} {interval}...")
         model_dir = self.dm.get_model_dir(self.model_type, symbol, interval)
         self.logger.info(f"Artifacts will be saved in: {model_dir}")
 
         patterns = PATH_CONFIG['patterns']
-        
+
         metadata = {
             'model_type': self.model_type,
             'feature_columns_processed': self.feature_columns_processed,
@@ -437,6 +452,9 @@ class ModelTrainer:
                 self.logger.info("Keras model saved successfully.")
             if self.preprocessor:
                 joblib.dump(self.preprocessor, model_dir / patterns['model_preprocessor'])
+                # Also save the sampler if it was used
+                if self.preprocessor_builder.sampler:
+                    joblib.dump(self.preprocessor_builder.sampler, model_dir / patterns['model_sampler']) # Need to define this pattern
                 self.logger.info("Preprocessor saved successfully.")
         else:
             if self.pipeline:
@@ -448,28 +466,31 @@ class ModelTrainer:
     def load(self, symbol: str, interval: str, model_type: str) -> 'ModelTrainer':
         self.logger.info(f"Loading trained {model_type} model for {symbol.upper()} {interval}...")
         self.model_type = model_type
-        
+
         model_dir = self.dm.get_model_dir(self.model_type, symbol, interval)
         if not model_dir.exists(): raise FileNotFoundError(f"Model directory not found: {model_dir}")
 
         patterns = PATH_CONFIG['patterns']
-        
+
         with open(model_dir / patterns['model_metadata'], 'r') as f: metadata = json.load(f)
-        
+
         config_dict = metadata.get('model_config')
         if config_dict:
             if 'lstm_params' in config_dict: config_dict['lstm_params'] = LSTMParams(**config_dict['lstm_params'])
             if 'random_forest_params' in config_dict: config_dict['random_forest_params'] = RandomForestParams(**config_dict['random_forest_params'])
             if 'xgboost_params' in config_dict: config_dict['xgboost_params'] = XGBoostParams(**config_dict['xgboost_params'])
-            
+
             init_fields = {f.name for f in fields(ModelConfig) if f.init}
             self._model_config = ModelConfig(**{k: v for k, v in config_dict.items() if k in init_fields})
-        
+
+        # UPDATED: Pass class_balancing_strategy and random_seed to PreprocessorBuilder during load
         self.preprocessor_builder = PreprocessorBuilder(
             scaler_type=self._model_config.scaler_type,
             pca_enabled=self._model_config.pca_enabled,
             pca_n_components=self._model_config.pca_n_components,
-            features_to_use=self._model_config.features_to_use
+            features_to_use=self._model_config.features_to_use,
+            class_balancing_strategy=self._model_config.lstm_params.class_balancing if self.model_type == 'lstm' else None, # Only for LSTM
+            random_seed=app_config.general.random_seed
         )
         self.model_builder = ModelBuilder(tf_available=TF_AVAILABLE, tf_module=tf)
 
@@ -492,6 +513,9 @@ class ModelTrainer:
             self.model = tf.keras.models.load_model(model_dir / patterns['model_keras'])
             self.preprocessor = joblib.load(model_dir / patterns['model_preprocessor'])
             self.preprocessor_builder.preprocessor = self.preprocessor
+            # Also load the sampler if it was used
+            if (model_dir / patterns['model_sampler']).exists(): # Check if the sampler file exists
+                self.preprocessor_builder.sampler = joblib.load(model_dir / patterns['model_sampler'])
         else:
             self.pipeline = joblib.load(model_dir / patterns['model_pipeline'])
             self.model = self.pipeline.named_steps['model']

@@ -60,6 +60,7 @@ PATH_CONFIG = {
         'model_metadata': "metadata.json",
         'model_preprocessor': "preprocessor.pkl",
         'model_keras': "model.keras",
+        'model_sampler': "sampler.pkl",
         'model_evaluation': "evaluation_metrics.json",
         'model_feature_importance': "feature_importance.csv",
         'model_plot': "{plot_type}.png",

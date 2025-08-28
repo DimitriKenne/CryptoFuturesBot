@@ -135,7 +135,7 @@ class BinanceFuturesAdapter(ExchangeInterface):
 
             # 5. Set leverage and margin mode
             await self.account_configurator.set_leverage()
-            await self.account_configurator.set_margin_mode()
+            # await self.account_configurator.set_margin_mode()
 
             self.logger.info("Binance Futures API async setup complete.")
         except Exception as e:

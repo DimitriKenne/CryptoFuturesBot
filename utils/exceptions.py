@@ -94,3 +94,17 @@ class ConfigurationError(Exception):
         self.config_path = config_path
         self.original_exception = original_exception
 
+class InsufficientDataError(Exception):
+    """
+    Custom exception raised when there's insufficient data for an operation,
+    e.g., after filtering by date or splitting train/test sets.
+    """
+    def __init__(self, message: str):
+        """
+        Initializes the InsufficientDataError.
+
+        Args:
+            message (str): A descriptive error message.
+        """
+        super().__init__(message)
+        self.message = message

@@ -16,10 +16,10 @@ class LabelingStrategy1Config:
 @dataclass
 class LabelingStrategy2Config:
     """Net Forward Return Quantile labeling. All '_pct' fields are percentages (0-100)."""
-    quantile_threshold_long_pct: float = 25.0
-    quantile_threshold_short_pct: float = 25.0
-    future_return_window: int = 150
-    return_type: Literal['log_returns', 'simple_returns'] = 'simple_returns'
+    quantile_threshold_long_pct: float = 50.0
+    quantile_threshold_short_pct: float = 50.0
+    future_return_window: int = 70
+    # return_type: Literal['log_returns', 'simple_returns'] = 'simple_returns'
 
 @dataclass
 class LabelingStrategy3Config:

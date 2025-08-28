@@ -11,15 +11,15 @@ class RiskConfig:
 @dataclass
 class TradeExecutionConfig:
     trading_fee_pct: float = 0.05 # Trading fee as a percentage
-    slippage_tolerance_pct: float = 0.05 # Slippage tolerance as a percentage
+    slippage_tolerance_pct: float = 0.01 # Slippage tolerance as a percentage
     min_liq_distance_pct: float = 2.0 # Minimum distance from liquidation price as a percentage
     exit_on_neutral_signal: bool = False # Whether to exit on a neutral signal
 
 @dataclass
 class EntryFilterConfig:
-    confidence_filter_enabled: bool = False
-    confidence_threshold_long_pct: float = 10 # Confidence threshold for long entries (percentage)
-    confidence_threshold_short_pct: float = 10 # Confidence threshold for short entries (percentage)
+    confidence_filter_enabled: bool = True
+    confidence_threshold_long_pct: float = 50 # Confidence threshold for long entries (percentage)
+    confidence_threshold_short_pct: float = 50 # Confidence threshold for short entries (percentage)
     volatility_regime_filter_enabled: bool = False
     trend_filter_enabled: bool = False
     trend_filter_ema_period: int = 20
@@ -33,10 +33,10 @@ class VolatilityRegimeConfig:
 
 @dataclass
 class SLTPConfig:
-    enabled: bool = True # Enable dynamic SLTP strategy
+    enabled: bool = False # Enable dynamic SLTP strategy
     volatility_window_bars: int = 20 # Window for ATR calculation
-    fixed_take_profit_pct: float = 6.0 # Fixed Take Profit as a percentage
-    fixed_stop_loss_pct: float = 2.0 # Fixed Stop Loss as a percentage
+    fixed_take_profit_pct: float = 8.0 # Fixed Take Profit as a percentage
+    fixed_stop_loss_pct: float = 3.0 # Fixed Stop Loss as a percentage
     alpha_take_profit: float = 14.0 # Multiplier for ATR-based TP
     alpha_stop_loss: float = 5.0 # Multiplier for ATR-based SL
     min_sl_tp_pct: float = 1.0 # Minimum SL/TP distance as a percentage

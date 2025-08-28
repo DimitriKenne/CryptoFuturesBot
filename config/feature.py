@@ -54,7 +54,7 @@ class FeatureConfig:
     ])
     fvg_lookback_bars: int = 3
     z_score_periods: List[int] = field(default_factory=lambda: [20, 30, 40])
-    adr_periods: List[int] = field(default_factory=lambda: [1, 2])
+    adr_periods: List[int] = field(default_factory=lambda: [1])
     trend_strength_periods: List[int] = field(default_factory=lambda: [20, 50])
 
     # Swing Pivots & Breakout Parameters
@@ -83,7 +83,7 @@ class FeatureConfig:
     })
 
     # NaN Handling
-    remove_nan_rows: bool = True
+    remove_nan_rows: bool = False
 
     # --- REMOVED: sequence_length_bars is now in ModelConfig ---
     

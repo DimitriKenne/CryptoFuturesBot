@@ -124,34 +124,20 @@ class ModelBuilder:
             # New parameter for intermediate dense layer
             dense_units = lstm_params.dense_units # Assume this new parameter exists in LSTMParams
 
-            if sequence_length <= 0:
-                raise ValueError("LSTM model parameter 'sequence_length_bars' must be positive.")
-            if n_layers <= 0:
-                raise ValueError("Number of LSTM layers (n_layers) must be positive.")
-            if units_per_layer <= 0:
-                raise ValueError("Units per LSTM layer (units_per_layer) must be positive.")
-            if not (0.0 <= dropout_rate <= 1.0):
-                raise ValueError("Dropout rate must be between 0.0 and 1.0.")
-            if learning_rate <= 0:
-                raise ValueError("Learning rate must be positive.")
-            if dense_units is not None and dense_units <= 0: # Validate new parameter
-                raise ValueError("Dense layer units (dense_units) must be positive or None.")
-
-
             model = self._tf.keras.models.Sequential()
             model.add(self._tf.keras.layers.Input(shape=(sequence_length, n_features)))
 
             # Add LSTM layers
             for i in range(n_layers):
                 return_sequences = i < n_layers - 1
-                model.add(self._tf.keras.layers.LSTM(units_per_layer, return_sequences=return_sequences))
+                model.add(self._tf.keras.layers.LSTM((i+1)*units_per_layer, return_sequences=return_sequences))
                 if dropout_rate > 0:
                     model.add(self._tf.keras.layers.Dropout(dropout_rate))
 
             # Add an intermediate Dense layer with non-linear activation (e.g., ReLU) if dense_units is specified
             if dense_units is not None:
-                self.logger.info(f"Adding intermediate Dense layer with {dense_units} units and ReLU activation.")
-                model.add(self._tf.keras.layers.Dense(dense_units, activation='relu'))
+                self.logger.info(f"Adding an intermediate Dense layer with {dense_units} units and Tanh activation.")
+                model.add(self._tf.keras.layers.Dense(dense_units, activation='tanh'))
                 if dropout_rate > 0: # Apply dropout after intermediate dense layer as well
                     model.add(self._tf.keras.layers.Dropout(dropout_rate))
 

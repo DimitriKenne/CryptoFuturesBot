@@ -56,16 +56,13 @@ validate_config(app_config)
 logger.info("Configuration validated successfully.")
 
 def run_tuning(model_type: str, X_full_cleaned: pd.DataFrame, y_full_cleaned: pd.Series, current_model_config: ModelConfig) -> Dict[str, Any]:
-    """
-    Performs hyperparameter tuning for the specified model using RandomizedSearchCV
-    with TimeSeriesSplit.
-    """
     logger.info(f"Starting hyperparameter tuning for {model_type}...")
 
     if model_type == 'lstm':
         logger.warning("Hyperparameter tuning for LSTM models is not implemented in this script.")
         return current_model_config.lstm_params.__dict__
 
+    # 1. Get base model params and tuning params
     if model_type == 'random_forest':
         base_model_params = current_model_config.random_forest_params.__dict__.copy()
         param_dist_dataclass = current_model_config.random_forest_tuning_params
@@ -75,7 +72,8 @@ def run_tuning(model_type: str, X_full_cleaned: pd.DataFrame, y_full_cleaned: pd
     else:
         raise ValueError(f"Model type '{model_type}' is not supported for tuning.")
 
-    param_dist = {k: v for k, v in param_dist_dataclass.__dict__.items() if v is not None}
+    # 2. Prefix model parameters for tuning with 'model__'
+    param_dist = {f"model__{k}": v for k, v in param_dist_dataclass.__dict__.items() if v is not None}
     if not param_dist:
         logger.warning(f"No tuning parameter distributions found for {model_type}. Using defaults.")
         return base_model_params
@@ -96,7 +94,7 @@ def run_tuning(model_type: str, X_full_cleaned: pd.DataFrame, y_full_cleaned: pd
         numeric_transformer_steps.append(('pca', PCA(n_components=current_model_config.pca_n_components)))
 
     preprocessor = ColumnTransformer(transformers=[('num', Pipeline(steps=numeric_transformer_steps), numeric_features)], remainder='passthrough')
-    
+
     steps = [('preprocessor', preprocessor)]
     if base_model_params.get('class_balancing') == 'undersampling':
         steps.append(('sampler', RandomUnderSampler(random_state=app_config.general.random_seed)))
@@ -112,11 +110,12 @@ def run_tuning(model_type: str, X_full_cleaned: pd.DataFrame, y_full_cleaned: pd
         cv=tscv, scoring=current_model_config.tuning_scoring_metric, random_state=app_config.general.random_seed,
         n_jobs=app_config.general.n_processors, verbose=1
     )
-    
+
     y_full_cleaned_mapped = y_full_cleaned.map({-1: 0, 0: 1, 1: 2})
     random_search.fit(X_full_cleaned, y_full_cleaned_mapped)
 
     logger.info(f"Best parameters found: {random_search.best_params_}")
+    # Remove the 'model__' prefix for updating config
     best_model_params = {k.replace('model__', ''): v for k, v in random_search.best_params_.items()}
     return {**base_model_params, **best_model_params}
 

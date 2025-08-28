@@ -166,6 +166,8 @@ def validate_lstm_params(params):
         raise ValueError("LSTMParams: dropout_rate must be float in [0, 1).")
     if not isinstance(params.learning_rate, float) or params.learning_rate <= 0:
         raise ValueError("LSTMParams: learning_rate must be positive float.")
+    if params.dense_units is not None and params.dense_units <= 0: # Validate new parameter
+        raise ValueError("Dense layer units (dense_units) must be positive or None.")
 
 def validate_model_config(config):
     if config.model_type not in ['xgboost', 'random_forest', 'lstm']:
