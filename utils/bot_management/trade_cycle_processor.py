@@ -17,10 +17,19 @@ logger = logging.getLogger(__name__)
 class TradeCycleProcessor:
     """Handles the logic for a single trading cycle within the main bot loop."""
 
-    def __init__(self, data_manager: DataManager, market_data_handler: MarketDataHandler, 
-                 exchange_adapter: ExchangeInterface, session_manager: LiveTradingSessionManager, 
-                 trade_execution_engine: TradeExecutionEngine, notifier: NotificationManager,
-                 model_type: str, symbol: str, interval: str):
+    def __init__(
+        self,
+        data_manager: DataManager,
+        market_data_handler: MarketDataHandler,
+        exchange_adapter: ExchangeInterface,
+        session_manager: LiveTradingSessionManager,
+        trade_execution_engine: TradeExecutionEngine,
+        notifier: NotificationManager,
+        model_type: str,
+        symbol: str,
+        interval: str,
+        mode: str
+    ):
         self.data_manager = data_manager
         self.market_data_handler = market_data_handler
         self.exchange_adapter = exchange_adapter
@@ -30,6 +39,7 @@ class TradeCycleProcessor:
         self.model_type = model_type
         self.symbol = symbol
         self.interval = interval
+        self.mode = mode  # 'automatic' or 'hybrid'
         self.last_processed_timestamp: Optional[datetime] = None
 
     def set_last_processed_timestamp(self, timestamp: Optional[datetime]):
@@ -56,7 +66,6 @@ class TradeCycleProcessor:
 
     async def _handle_exits(self, position: Dict[str, Any], candle_data: pd.Series):
         """Checks for an exit condition and executes the close if triggered."""
-        # Note: In live mode, current_bar_index is not used, so we pass -1.
         exit_triggered, reason, exit_price = self.trade_execution_engine.check_exit_conditions(position, candle_data, -1)
         if exit_triggered:
             logger.info(f"Exit triggered for position {position['id']} due to: {reason}")
@@ -67,21 +76,16 @@ class TradeCycleProcessor:
         logger.info(f"Executing close workflow for position {position['id']}.")
         try:
             await self.trade_execution_engine.cancel_remaining_orders(position, reason)
-            
             close_side = 'SELL' if position['direction_str'] == 'long' else 'BUY'
             close_confirmation = await self.exchange_adapter.place_market_order(
                 symbol=self.symbol, side=close_side,
                 quantity=position['quantity'], reduce_only=True
             )
-            
             finalized_trade = self.trade_execution_engine.calculate_exit_details(
                 open_trade=position, exit_price=close_confirmation['avgPrice'],
                 exit_time=close_confirmation['time'], exit_reason=reason
             )
-            
             self.session_manager.close_position(finalized_trade)
-            
-            # --- NOTIFICATION ---
             await self.notifier.send_notification(
                 f"✅ TRADE CLOSED: {position.get('direction_str').upper()} {self.symbol}\n"
                 f"Exit @ {finalized_trade.get('exit_price',0):.4f}\n"
@@ -90,7 +94,6 @@ class TradeCycleProcessor:
                 f"Capital: ${self.session_manager.get_current_capital():.2f}",
                 level='info'
             )
-            
         except (OrderExecutionError, ExchangeConnectionError) as e:
             logger.error(f"Error executing close workflow for position {position['id']}: {e}", exc_info=True)
             await self.notifier.send_notification(f"🚨 ERROR closing trade {position['id']}: {e}", level='error')
@@ -98,20 +101,30 @@ class TradeCycleProcessor:
     async def _handle_new_entry(self, candle_data: pd.Series):
         """Checks for a new entry signal and executes the entry workflow."""
         signal = int(candle_data.get('signal', 0))
-        if signal == 0: return
-
+        if signal == 0:
+            return
         if not self.session_manager.can_open_new_trade(candle_data.name):
             return
-        
         probs = candle_data.get('probabilities', {})
-        # Defensive patch: ensure all keys -1, 0, 1 are present and cast to float
         model_probabilities = {k: float(probs.get(k, 0.0)) for k in [-1, 0, 1]}
         trade_plan = self.trade_execution_engine.calculate_entry_details(
-            signal=signal, current_capital=self.session_manager.get_current_capital(),
-            current_price=candle_data['close'], current_bar_features=candle_data,
+            signal=signal,
+            current_capital=self.session_manager.get_current_capital(),
+            current_price=candle_data['close'],
+            current_bar_features=candle_data,
             model_probabilities=pd.Series(model_probabilities)
         )
-        if not trade_plan: return
+        if not trade_plan:
+            return
+        
+        if self.mode == "hybrid":
+            confirmed = await self.hybrid_menu(trade_plan)
+            if not confirmed:
+                logger.info("Trade entry rejected/skipped by user in hybrid mode.")
+                await self.notifier.send_notification(
+                    "Trade entry rejected/skipped by user.", level="info"
+                )
+                return
         
         await self._execute_entry_workflow(trade_plan)
 
@@ -123,8 +136,6 @@ class TradeCycleProcessor:
             entry_order = await self.exchange_adapter.place_market_order(
                 self.symbol, trade_plan['side'], trade_plan['quantity']
             )
-            
-            # ----------- NEW: Poll for fill status -----------
             order_id = entry_order['orderId']
             max_wait = 30  # seconds
             interval = 1.5   # seconds
@@ -139,15 +150,13 @@ class TradeCycleProcessor:
                 await self.notifier.send_notification(f"🚨 ERROR: Order {order_id} not filled after {max_wait}s.", level='error')
                 await self.trade_execution_engine.cleanup_failed_entry(self.symbol, entry_order, None, None)
                 return
-            # -----------------------------------------------
+
             sl_order, tp_order = await self.trade_execution_engine.place_and_verify_sltp_orders(trade_plan)
             liq_price = await self.exchange_adapter.get_position_liquidation_price(self.symbol)
             final_position = self.trade_execution_engine.reconcile_open_position(
                 trade_plan, order_info, sl_order, tp_order, liq_price
             )
             self.session_manager.set_open_position(final_position)
-            
-            # --- NOTIFICATION ---
             await self.notifier.send_notification(
                 f"🚀 TRADE ENTERED: {final_position.get('direction_str').upper()} {self.symbol}\n"
                 f"Entry @ {final_position.get('entry_price',0):.4f}\n"
@@ -155,7 +164,6 @@ class TradeCycleProcessor:
                 f"SL: {final_position.get('stop_loss_price',0):.4f} | TP: {final_position.get('take_profit_price',0):.4f}",
                 level='info'
             )
-
         except (OrderExecutionError, ExchangeConnectionError) as e:
             logger.critical(f"CRITICAL FAILURE in entry workflow: {e}", exc_info=True)
             await self.notifier.send_notification(f"🚨 CRITICAL ERROR entering trade: {e}", level='critical')
@@ -168,3 +176,121 @@ class TradeCycleProcessor:
             self.session_manager.get_state_as_dict(),
             self.model_type, self.symbol, self.interval
         )
+
+    async def hybrid_menu(self, trade_plan: Dict[str, Any], timeout: int = 60):
+        """CLI menu for hybrid mode with timeout and input validation."""
+        import threading
+
+        menu_text = (
+            "\n--- Trade Proposal ---\n"
+            f"Direction: {trade_plan.get('direction_str','').upper()}\n"
+            f"Price: {trade_plan.get('entry_price')}\n"
+            f"Quantity: {trade_plan.get('quantity')}\n"
+            f"SL: {trade_plan.get('stop_loss_price')}\n"
+            f"TP: {trade_plan.get('take_profit_price')}\n"
+            "----------------------\n"
+            "Options:\n"
+            "  y      - Approve and enter trade\n"
+            "  n      - Reject trade\n"
+            "  help   - Print trade details again\n"
+            "  skip   - Skip and go to next cycle\n"
+            f"(Timeout in {timeout} seconds will skip)\n"
+        )
+
+        # --- Notify via Telegram that trade needs approval ---
+        notification_text = (
+            "🚦 Trade Approval Needed (Hybrid Mode):\n"
+            f"Symbol: {self.symbol}\n"
+            f"Direction: {trade_plan.get('direction_str','').upper()}\n"
+            f"Price: {trade_plan.get('entry_price')}\n"
+            f"Quantity: {trade_plan.get('quantity')}\n"
+            f"SL: {trade_plan.get('stop_loss_price')}\n"
+            f"TP: {trade_plan.get('take_profit_price')}\n"
+            "Reply in terminal to approve or reject."
+        )
+        logger.info("Trade proposal requires user approval (hybrid mode).")
+        await self.notifier.send_notification(notification_text, level="info")
+
+        valid_responses = {'y', 'n', 'help', 'skip'}
+        response = None
+
+        def prompt():
+            nonlocal response
+            print(menu_text)
+            while True:
+                raw = input("Your choice: ").strip().lower()
+                if raw in valid_responses:
+                    response = raw
+                    break
+                else:
+                    print("Invalid input. Type 'help' for menu.")
+
+        # Run prompt in thread for timeout
+        import threading
+        prompt_thread = threading.Thread(target=prompt)
+        prompt_thread.daemon = True
+        prompt_thread.start()
+        prompt_thread.join(timeout)
+        if response is None:
+            logger.warning(f"No input received in {timeout} seconds. Skipping trade.")
+            await self.notifier.send_notification(
+                f"Trade entry skipped due to timeout ({timeout} seconds).", level="warning"
+            )
+            return False
+        if response == 'y':
+            logger.info("Trade entry approved by user in hybrid mode.")
+            await self.notifier.send_notification(
+                "Trade entry approved by user.", level="info"
+            )
+            return True
+        elif response == 'n' or response == 'skip':
+            logger.info("Trade entry rejected/skipped by user in hybrid mode.")
+            await self.notifier.send_notification(
+                "Trade entry rejected/skipped by user.", level="info"
+            )
+            return False
+        elif response == 'help':
+            print(menu_text)
+            return await self.hybrid_menu(trade_plan, timeout)
+        return False
+    
+    
+    async def ensure_sltp_orders(self, position: Dict[str, Any]):
+        """Detects and replaces missing SL/TP orders for a live position."""
+
+        sl_missing = not position.get("sl_order_id")
+        tp_missing = not position.get("tp_order_id")
+        symbol = position["symbol"]
+        side_to_close = "SELL" if position.get("direction_str") == "long" else "BUY"
+        quantity = position["quantity"]
+
+        entry_price = position["entryPrice"]
+        latest_atr = None # Optionally fetch ATR from latest candle or features if needed
+        stop_loss_price, take_profit_price = self.trade_execution_engine.trade_calculation_helpers.calculate_sl_tp_prices(
+            side=side_to_close.lower(), current_price=entry_price, latest_atr=latest_atr
+        )
+
+        # Place missing SL
+        if sl_missing:
+            sl_order = await self.exchange_adapter.place_stop_market_order(
+                symbol=symbol, side=side_to_close, quantity=quantity, stop_price=stop_loss_price
+            )
+            position["sl_order_id"] = sl_order["orderId"]
+
+        # Place missing TP
+        if tp_missing:
+            tp_order = await self.exchange_adapter.place_take_profit_market_order(
+                symbol=symbol, side=side_to_close, quantity=quantity, stop_price=take_profit_price
+            )
+            position["tp_order_id"] = tp_order["orderId"]
+
+        # Update the session manager state
+        self.session_manager.set_open_position(position)
+
+        # Persist using data_manager (the ONLY way to save state)
+        self.data_manager.save_bot_state(
+            self.session_manager.get_state_as_dict(),
+            self.model_type, self.symbol, self.interval
+        )
+
+        logger.info("Replaced missing SL/TP orders and persisted updated bot state.")

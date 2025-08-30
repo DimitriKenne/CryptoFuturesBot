@@ -100,6 +100,10 @@ class BinanceAPIClientManager:
                         tld=config.tld,
                         testnet=config.testnet,
                     )
+                    
+                    # Synchronize time with Binance server
+                    await BinanceAPIClientManager._instance.futures_time()
+                    
                     BinanceAPIClientManager._is_connected = True
                     self.logger.info("Successfully connected to Binance AsyncClient.")
                 except Exception as e:

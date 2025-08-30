@@ -330,6 +330,11 @@ class BinanceFuturesAdapter(ExchangeInterface):
                     liquidation_price = liquidation_price_raw if liquidation_price_raw > 0 else np.nan
                     leverage = int(pos_info['leverage']) if pos_info.get('leverage') else self.leverage
                     entry_time = None # Binance API does not directly provide entry time for positions here
+                    margin_val = pos_info.get('isolatedMargin')
+                    try:
+                        entry_margin = float(margin_val) if margin_val not in (None, '', 0) else None
+                    except (ValueError, TypeError):
+                        entry_margin = None
 
                     positions.append({
                         'symbol': pos_info['symbol'],
@@ -338,7 +343,7 @@ class BinanceFuturesAdapter(ExchangeInterface):
                         'entryPrice': entry_price,
                         'unrealizedPnl': unrealized_pnl,
                         'leverage': leverage,
-                        'entryMargin': float(pos_info['isolatedMargin']) if pos_info['isolatedMargin'] else None,
+                        'entryMargin': entry_margin,
                         'liquidationPrice': liquidation_price,
                         'entryTime': entry_time # This will be None, to be potentially enriched elsewhere
                     })
@@ -724,6 +729,36 @@ class BinanceFuturesAdapter(ExchangeInterface):
             self.logger.error(f"Unexpected error getting order info ({symbol}, {order_id}): {e}", exc_info=True)
             raise ExchangeConnectionError(f"Failed to get order info: {e}") from e
 
+    @async_retry_api_call()
+    async def close_position(self, symbol: str, position: Dict[str, Any]) -> Dict[str, Any]:
+        """
+        Closes the open position for the given symbol by placing a market order in the opposite direction.
+
+        Args:
+            symbol (str): Trading pair symbol.
+            position (Dict[str, Any]): The position dict, must contain 'direction' and 'quantity'.
+
+        Returns:
+            Dict[str, Any]: Resulting order details.
+        """
+        symbol = symbol.upper()
+        direction = position.get('direction')
+        quantity = position.get('quantity')
+        if not direction or not quantity:
+            raise OrderExecutionError("Position must contain 'direction' and 'quantity' to close.")
+
+        # Determine opposite side
+        side = 'SELL' if direction == 'long' else 'BUY'
+        # Place market order with reduceOnly=True to close the position
+        self.logger.info(f"Closing position for {symbol}: {direction}, Qty={quantity} with side {side}")
+        close_order = await self.place_market_order(
+            symbol=symbol,
+            side=side,
+            quantity=quantity,
+            reduce_only=True
+        )
+        self.logger.info(f"Position closed for {symbol}: {close_order}")
+        return close_order
 
     # --- Utility Methods (delegated to exchange info helper) ---
 

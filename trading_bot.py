@@ -1,4 +1,5 @@
 import asyncio
+from html import parser
 import logging
 import signal
 import argparse
@@ -32,12 +33,13 @@ logger = logging.getLogger(__name__)
 class TradingBot:
     """The main orchestrator for the live trading bot."""
 
-    def __init__(self, config: AppConfig, symbol: str, interval: str, model_type: str, notifier: NotificationManager):
+    def __init__(self, config: AppConfig, symbol: str, interval: str, model_type: str, mode: str, notifier: NotificationManager):
         self.logger = logging.getLogger(self.__class__.__name__)    
         self.config = config
         self.symbol = symbol
         self.interval = interval
         self.model_type = model_type
+        self.mode = mode
         self.notifier = notifier
 
         self.is_running = False
@@ -58,7 +60,7 @@ class TradingBot:
         self.trade_cycle_processor = TradeCycleProcessor(
             data_manager, market_data_handler, exchange_adapter, 
             session_manager, trade_execution_engine, self.notifier,
-            self.model_type, self.symbol, self.interval
+            self.model_type, self.symbol, self.interval, self.mode
         )
         logger.info("All bot components initialized.")
 
@@ -185,6 +187,9 @@ def main():
         '1m', '5m', '15m', '30m', '1h', '2h', '4h', '6h', '8h', '12h', '1d', '3d', '1w', '1M'
     ], help='Time interval (e.g., 1h, 1d).')
     parser.add_argument('--model_type', type=str, required=True, choices=list(app_config.model.AVAILABLE_MODEL_TYPES.keys()), default=app_config.model.model_type, help='Model key from app_config.model (e.g., xgboost, lstm).')
+    # Add to CLI arguments:
+    parser.add_argument('--mode', type=str, choices=['automatic', 'hybrid'], default='automatic', help='Trading bot mode: automatic or hybrid.')
+    
     args = parser.parse_args()
 
     logger.info(f"--- Trading Bot Script Started ({args.symbol} {args.interval} {args.model_type}) ---")
@@ -201,7 +206,8 @@ def main():
         symbol=args.symbol,
         interval=args.interval,
         model_type=args.model_type,
-        notifier=notifier
+        mode=args.mode,
+        notifier=notifier,
     )
 
     def handle_shutdown_signal(sig, frame):

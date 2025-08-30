@@ -20,9 +20,8 @@ class GeneralConfig:
     min_trade_loop_interval_seconds: float = 10.0 # Minimum time the bot will sleep between cycles, regardless of interval
     polling_frequency_factor: float = 0.25 # How often to poll within a candle's interval (e.g., 0.25 means poll every 1/4 of the candle's duration)
 
-    execution_mode: str = "auto"  # Options: "auto", "manual", "hybrid"
-    # "auto" = bot places trades automatically
-    # "manual" = bot only sends signals, user places trades manually
+    execution_mode: str = "automatic"  # Options: "automatic", "hybrid"
+    # "automatic" = bot places trades automatically
     # "hybrid" = bot can place trades if user confirms (e.g., via Telegram, CLI, GUI)
     
     

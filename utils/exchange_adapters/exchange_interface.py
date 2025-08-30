@@ -239,6 +239,21 @@ class ExchangeInterface(ABC):
             List[Dict[str, Any]]: A list of dictionaries, each with cancellation details for an order.
         """
         pass
+    
+    @abstractmethod
+    async def close_position(self, symbol: str, position: Dict[str, Any]) -> Dict[str, Any]:
+        """
+        Closes an open position for the given symbol.
+        This should place a market order in the opposite direction for the position's quantity.
+        
+        Args:
+            symbol (str): Trading pair symbol.
+            position (Dict[str, Any]): The position dictionary with at least 'direction' and 'quantity'.
+
+        Returns:
+            Dict[str, Any]: Dictionary containing order details of the closing trade.
+        """
+        pass
 
     @abstractmethod
     async def get_order_info(self, symbol: str, order_id: str) -> Optional[Dict[str, Any]]:

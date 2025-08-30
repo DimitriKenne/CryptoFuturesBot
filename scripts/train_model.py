@@ -154,6 +154,7 @@ def main(
     symbol: str,
     interval: str,
     model_type: str,
+    train_ratio: float,
     user_login: str, # ADDED
     skip_tuning: bool = False,
     features: Optional[List[str]] = None,
@@ -166,6 +167,7 @@ def main(
     model_config_for_trainer = copy.deepcopy(app_config.model)
     model_config_for_trainer.model_type = model_type
     model_config_for_trainer.features_to_use = features
+    model_config_for_trainer.train_test_split_ratio = train_ratio
     if enable_pca:
         model_config_for_trainer.pca_enabled = True
         if pca_components is not None:
@@ -242,6 +244,8 @@ if __name__ == "__main__":
         '--model_type', type=str, choices=['random_forest', 'xgboost', 'lstm'], default='xgboost',
         help="Model type to train. Default: xgboost."
     )
+    parser.add_argument('--train_ratio', type=float, default=app_config.model.train_test_split_ratio,
+                        help='Ratio of data to use for training split. Only used in "train" or "test" mode.')
     # ADDED: Command-line argument for user login
     parser.add_argument(
         '--user_login', type=str, default='Dimitri',

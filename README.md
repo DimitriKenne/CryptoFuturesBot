@@ -1,8 +1,7 @@
 # Algorithmic Futures Trading Bot: Machine Learning-Driven Trading Strategy
 
-
-**Author:** DimitriKenne
-**Last Updated:** 2025-08-22
+**Author:** DimitriKenne  
+**Last Updated:** 2025-08-28
 
 This project presents a sophisticated algorithmic trading bot designed for futures markets, leveraging advanced machine learning techniques for predictive signal generation and robust risk management. Built with a modular and extensible architecture, this bot facilitates end-to-end automation of trading strategies, from data acquisition and feature engineering to model training, backtesting, and live execution.
 
@@ -62,7 +61,7 @@ This project was initiated in April 2025, directly inspired by the research pres
 - **Dynamic Feature Engineering:** Features are engineered dynamically on raw data streams within the MarketDataHandler for backtesting and live trading, ensuring temporal safety. Processed and labeled data can still be optionally saved/loaded for model training.
 
 ### Flexible Label Generation
-- **Strategy-Based Labeling:** Multiple strategies selectable via command-line argument (Triple Barrier, Net Forward Return Quantile, Future Range Dominance, Clustering-Based Labeling).
+- **Strategy-Based Labeling:** Multiple strategies selectable via command-line argument (`--labeling-strategy`): Triple Barrier, Net Forward Return Quantile, Future Range Dominance, Clustering-Based Labeling.
 - **Label Propagation Smoothing:** Configurable min_holding_period to smooth raw labels and filter out noise.
 - **Input Validation:** Checks for required OHLCV/features.
 - **Extensible Design:** Easily add new strategies via BaseLabelingStrategy.
@@ -99,15 +98,13 @@ This project was initiated in April 2025, directly inspired by the research pres
 │   └── raw/                      # Raw OHLCV data
 ├── docs/                         # Project documentation
 ├── logs/                         # Application logs
-├── models/                       # Trained machine learning models
-│   └── trained_models/
-│       ├── lstm/
-│       ├── random_forest/
-│       └── xgboost/
+├── models/                       # Trained machine learning models, organized by type (e.g., models/xgboost/, models/lstm/)
 ├── results/                      # Backtesting and live trading results
-│   ├── analysis/
-│   ├── backtesting/
-│   └── live_trading/
+│   ├── labeling/                 # Labeling analysis results
+│   ├── model_analysis/           # Model analysis results
+│   ├── backtesting/              # Backtesting results
+│   ├── monte_carlo/              # Monte Carlo backtesting results
+│   └── live_trading/             # Live trading results
 ├── scripts/                      # Utility scripts for workflow automation
 │   ├── analyze_labels.py
 │   ├── analyze_model.py
@@ -120,14 +117,16 @@ This project was initiated in April 2025, directly inspired by the research pres
 │   ├── monte_carlo_backtest.py
 │   └── train_model.py
 └── utils/                        # Core utility modules
+    ├── bot_management/           # Bot management modules (trade_cycle_processor.py, lifecycle_manager.py)
     ├── exceptions.py             # Custom exception classes
     ├── logger_config.py          # Logging configuration
     ├── notification_manager.py   # Handles sending notifications
-    ├── analysis/                 # Utilities for analyzing trades and performance
+    ├── strategy_evaluation/      # Modules for evaluating strategy performance, metrics, and simulation (replaces analysis/)
     │   ├── performance_analyzer.py
     │   ├── monte_carlo_analyzer.py
     │   ├── metrics_calculator.py
-    │   └── plotting_utils.py
+    │   ├── plotting_utils.py
+    │   └── path_simulator.py
     ├── data_management/          # Utilities for data handling and live data processing
     │   ├── data_manager.py
     │   └── market_data_handler.py
@@ -151,14 +150,13 @@ This project was initiated in April 2025, directly inspired by the research pres
     │   ├── label_analyzer.py
     │   ├── analysis_plotter.py
     │   └── analysis_calculator.py
-    ├── simulation/               # Utilities for Monte Carlo simulations
-    │   └── price_path_simulator.py
-    ├── strategy_execution/       # Utilities for trade execution and session management
+    ├── strategy_execution/       # Trade execution and session management modules
     │   ├── backtester.py         # Main backtesting logic
     │   ├── entry_filters.py
     │   ├── trade_calculation_helpers.py
     │   ├── trade_execution_engine.py
-    │   └── trading_session_manager.py
+    │   ├── trading_session_manager.py
+    │   └── live_trading_session_manager.py
     └── training/                 # Utilities used during the model training phase
         ├── model_trainer.py
         ├── model_builder.py
@@ -187,13 +185,11 @@ This directory serves as the central hub for all configuration parameters, organ
 - **trading.py:** Aggregates risk management, trade execution, entry/exit filters, and backtesting parameters.
 - **notifier.py:** Settings for notification services (e.g., Telegram token and chat ID).
 
-### utils/analysis/
-Contains utilities for analyzing trading performance and results.
+### utils/bot_management/
+Contains bot management modules such as `trade_cycle_processor.py` and `lifecycle_manager.py`, responsible for supervising trading cycles, user interaction in hybrid mode, and safe lifecycle management.
 
-- **performance_analyzer.py:** Analyzes trading performance from backtesting or live trading results, calculating key metrics and generating plots.
-- **monte_carlo_analyzer.py:** Aggregates results from Monte Carlo simulations, calculates probabilistic metrics, and visualizes outcomes.
-- **metrics_calculator.py:** Provides methods for calculating various trading performance metrics.
-- **plotting_utils.py:** Centralized utility methods for generating consistent visualizations for analysis.
+### utils/strategy_evaluation/
+Contains modules for evaluating strategy performance, metrics, and simulations (replaces the old `utils/analysis/` folder). This now includes `path_simulator.py` (previously in utils/simulator/).
 
 ### utils/data_management/
 Handles market data loading, storage, and live data stream processing.
@@ -230,11 +226,6 @@ Provides utilities for generating and analyzing labels for machine learning mode
 - **analysis_plotter.py:** Provides plotting utilities specifically for label analysis.
 - **analysis_calculator.py:** Calculates metrics related to label analysis.
 
-### utils/simulation/
-Dedicated to components used in advanced simulations.
-
-- **price_path_simulator.py:** Fits GARCH models and generates synthetic OHLCV data paths with diffusion and jump components for Monte Carlo analysis.
-
 ### utils/strategy_execution/
 Houses the core components for trade strategy execution, encompassing backtesting and live trading logic.
 
@@ -243,6 +234,7 @@ Houses the core components for trade strategy execution, encompassing backtestin
 - **trade_calculation_helpers.py:** Provides fundamental calculations required for trade management (e.g., PnL, fees, liquidation price).
 - **trade_execution_engine.py:** Central engine for handling all trade-related calculations and strategy logic, including position sizing, SL/TP, and PnL.
 - **trading_session_manager.py:** Manages the financial state, open positions, and trade history for a trading session, including persistence for live trading.
+- **live_trading_session_manager.py:** Manages live trading session state, open positions, and capital tracking.
 
 ### utils/training/
 Contains utilities essential for the machine learning model training phase.
@@ -303,7 +295,7 @@ The `scripts/` directory contains utility scripts for automating various parts o
 
 ### Live Trading
 ```sh
-python trading_bot.py --symbol ADAUSDT --interval 5m --model lstm
+python trading_bot.py --symbol ADAUSDT --interval 5m --model_type lstm
 ```
 
 ### Data Fetching
@@ -321,38 +313,38 @@ python -m scripts.generate_features --symbol ADAUSDT --interval 5m
 
 ### Label Generation
 ```sh
-python scripts/create_labels.py --symbol BTCUSDT --interval 1h --label-strategy strategy_2
-python scripts/create_labels.py --symbol ADAUSDT --interval 5m --label-strategy strategy_3
-python scripts/create_labels.py --symbol ADAUSDT --interval 15m --label-strategy strategy_1
-python scripts/create_labels.py --symbol ETHUSDT --interval 1h --label-strategy strategy_4
+python scripts/create_labels.py --symbol BTCUSDT --interval 1h --labeling-strategy strategy_2
+python scripts/create_labels.py --symbol ADAUSDT --interval 5m --labeling-strategy strategy_3
+python scripts/create_labels.py --symbol ADAUSDT --interval 15m --labeling-strategy strategy_1
+python scripts/create_labels.py --symbol ETHUSDT --interval 1h --labeling-strategy strategy_4
 ```
 
 ### Model Training
 ```sh
-python scripts/train_model.py --symbol BTCUSDT --interval 1h
-python scripts/train_model.py --symbol ADAUSDT --interval 5m --model random_forest
-python scripts/train_model.py --symbol ETHUSDT --interval 15m --model lstm --train_ratio 0.7
-python scripts/train_model.py --symbol ADAUSDT --interval 5m --model random_forest --skip_tuning
+python scripts/train_model.py --symbol BTCUSDT --interval 1h --model_type xgboost
+python scripts/train_model.py --symbol ADAUSDT --interval 5m --model_type random_forest
+python scripts/train_model.py --symbol ETHUSDT --interval 15m --model_type lstm --train_ratio 0.7
+python scripts/train_model.py --symbol ADAUSDT --interval 5m --model_type random_forest --skip_tuning
 python scripts/train_model.py --symbol BTCUSDT --interval 1h --features ema_10 rsi_14 macd
 ```
 
 ### Model Analysis
 ```sh
-python scripts/analyze_model.py --symbol ADAUSDT --interval 5m --model random_forest
+python scripts/analyze_model.py --symbol ADAUSDT --interval 5m --model_type random_forest
 ```
 
 ### Backtesting
 The backtester now loads raw data and performs feature engineering internally via MarketDataHandler. No need to run `generate_features.py` beforehand unless you want to pre-process.
 ```sh
-python scripts/backtest.py --symbol BTCUSDT --interval 1h --model xgboost
-python scripts/backtest.py --symbol ADAUSDT --interval 5m --model random_forest
-python scripts/backtest.py --symbol ADAUSDT --interval 5m --model lstm --backtest_mode full --train_ratio 0.7
+python scripts/backtest.py --symbol BTCUSDT --interval 1h --model_type xgboost
+python scripts/backtest.py --symbol ADAUSDT --interval 5m --model_type random_forest
+python scripts/backtest.py --symbol ADAUSDT --interval 5m --model_type lstm --backtest_mode full --train_ratio 0.7
 ```
 
 ### Monte Carlo Backtesting
 The Monte Carlo backtester generates raw synthetic data, which is then feature-engineered internally by MarketDataHandler during each simulation.
 ```sh
-python scripts/monte_carlo_backtest.py --symbol ADAUSDT --interval 5m --model lstm --num_simulations 100
+python scripts/monte_carlo_backtest.py --symbol ADAUSDT --interval 5m --model_type lstm --num_simulations 100
 ```
 
 ### Results Analysis
@@ -364,8 +356,8 @@ python scripts/analyze_results.py --symbol BTCUSDT --interval 1h --model_type xg
 
 ### Label Analysis
 ```sh
-python scripts/analyze_labels.py --symbol ADAUSDT --interval 5m --label-strategy strategy_2
-python scripts/analyze_labels.py --symbol BTCUSDT --interval 1h --label-strategy strategy_1 --future-horizons 10 30 60
+python scripts/analyze_labels.py --symbol ADAUSDT --interval 5m --labeling-strategy strategy_2
+python scripts/analyze_labels.py --symbol BTCUSDT --interval 1h --labeling-strategy strategy_1 --future-horizons 10 30 60
 ```
 
 ### Convert Trades to JSON

@@ -1,9 +1,9 @@
 # Trading Bot - Complete Operational Workflow
 
 **Author:** DimitriKenne  
-**Date:** 2025-08-24 02:40:59 UTC
+**Date:** 2025-08-28 22:34:03 UTC
 
-This document outlines the definitive, end-to-end operational workflow for the live trading bot. It serves as the official blueprint for the `trading_bot.py` implementation.
+This document outlines the definitive, end-to-end operational workflow for the live trading bot, including support for "Hybrid mode" with a robust CLI menu, improved input validation, and timeout handling for human-in-the-loop confirmation.
 
 ---
 
@@ -11,8 +11,8 @@ This document outlines the definitive, end-to-end operational workflow for the l
 
 This phase ensures the bot starts in a clean, known, and synchronized state using a comprehensive, two-phase reconciliation process.
 
-1. **Load Configuration:** The bot starts and loads all necessary parameters from the `AppConfig` object, including the unique `bot_id`.
-2. **Initialize Core Components:** It creates instances of our main modules (`LifecycleManager`, `TradeCycleProcessor`, etc.).
+1. **Load Configuration:** The bot starts and loads all necessary parameters from the `AppConfig` object, including the unique `bot_id` and the selected `mode` (`automatic` or `hybrid`).
+2. **Initialize Core Components:** It creates instances of all core modules (`LifecycleManager`, `TradeCycleProcessor`, etc.).
 3. **Send Startup Notification:** "Bot is starting up..."
 4. **Connect to Exchange:** The `BinanceFuturesAdapter` connects to the API and fetches initial exchange rules.
 5. **Load Persistent State:** The bot loads the last known state (`current_capital`, `open_position`, etc.) from the `state.json` file into the `LiveTradingSessionManager`.
@@ -25,7 +25,7 @@ This phase ensures the bot starts in a clean, known, and synchronized state usin
 
     *   **Phase B: Reconcile State & Enforce Protection**
         1.  **Reconcile Active Position:**
-            *   **Match Found:** If the exchange has one position that matches the bot's loaded position (by order ID), it is adopted.
+            *   **Match Found:** If the exchange has one position matching the bot's loaded position (by order ID), it is adopted.
             *   **Orphan Found:** If the exchange has a position but the bot has no state, a `CRITICAL` error is raised, and the bot stops. Manual intervention is required.
             *   **Ghost Found:** If the bot has a position in its state but the exchange does not, a `WARNING` is logged, and the position is cleared from the bot's state.
             *   **Multiple Positions:** If the exchange shows multiple positions, a `WARNING` is logged, and an attempt is made to close the smaller, unexpected positions to consolidate into one.
@@ -51,26 +51,44 @@ This loop runs continuously, representing the core operational cycle of the bot.
 
 ---
 
-## Phase 3: New Trade Workflow (Enhanced with Verification)
+## Phase 3: New Trade Workflow (with Hybrid Mode CLI Menu)
 
 This workflow is triggered by a valid, non-zero signal when all entry conditions are met.
 
 1. **Check Entry Rules:** The `LiveTradingSessionManager` checks if a new trade can be opened.
 2. **Calculate Trade Proposal:** `trade_execution_engine.calculate_entry_details()` is called.
-3. **Execute & Verify Entry:** The `TradeCycleProcessor` executes the robust entry sequence, ensuring every order placed (entry, SL, TP) is tracked by its unique order ID.
-4. **Reconcile & Persist:** The final, verified position is created and saved to the `LiveTradingSessionManager` and the `state.json` file.
-5. **Send Notification:** "TRADE ENTERED: [Details: Direction, Price, Qty, SL, TP]"
+3. **Hybrid Mode Check:**  
+    * If operating in **automatic mode**:  
+        - The trade is executed immediately.
+    * If operating in **hybrid mode**:  
+        - The bot presents a CLI menu to the user, displaying all trade details (direction, price, quantity, SL, TP, etc.).
+        - The CLI menu supports:
+            - `y` or `yes`: Approve the trade and proceed with execution.
+            - `n` or `no`: Reject the trade; no entry is made.
+            - `close`: Close the current open position (if any).
+            - `close X`: Close fraction `X` (e.g., `close 0.5`) of the current open position.
+            - `help`: Print trade details and menu options again.
+            - `skip`: Skip this trade and move to next cycle.
+        - **Timeout Handling:** If no input is received within the configured timeout period (e.g., 60 seconds), the trade is skipped and logged.
+        - **Input Validation:** Invalid responses are reprompted; only accepted commands are processed.
+        - The bot acts according to the user's choice.
+4. **Execute & Verify Entry:** The `TradeCycleProcessor` executes the robust entry sequence, ensuring every order placed (entry, SL, TP) is tracked by its unique order ID.
+5. **Reconcile & Persist:** The final, verified position is created and saved to the `LiveTradingSessionManager` and the `state.json` file.
+6. **Send Notification:** "TRADE ENTERED: [Details: Direction, Price, Qty, SL, TP]"
 
 ---
 
-## Phase 4: Close Position Workflow (Enhanced with Order Cleanup)
+## Phase 4: Close Position Workflow
 
-This is triggered by an exit condition.
+This is triggered by an exit condition (SL, TP, max holding, reversal, or manual close).
 
-1. **Cancel Inactive Order:** The `TradeExecutionEngine` cancels the remaining SL or TP order.
-2. **Execute the Close:** The `TradeCycleProcessor` places the closing market order.
-3. **Finalize & Persist:** The final PnL is calculated, and the state is updated and saved.
-4. **Send Notification:** "TRADE CLOSED: [Details: Direction, Price, PnL, Reason]"
+1. **Automatic & Hybrid Mode:**  
+    - All exits triggered by SL, TP, liquidation, reversal signal, or max holding are executed immediately—**no confirmation is required in hybrid mode**.
+    - Manual closes (full or partial) can be triggered by the CLI menu in hybrid mode.
+2. **Cancel Inactive Orders:** The `TradeExecutionEngine` cancels the remaining SL or TP order.
+3. **Execute the Close:** The `TradeCycleProcessor` places the closing market order (full or partial as requested).
+4. **Finalize & Persist:** The final PnL is calculated, and the state is updated and saved.
+5. **Send Notification:** "TRADE CLOSED: [Details: Direction, Price, PnL, Reason]"
 
 ---
 
@@ -89,3 +107,7 @@ This is triggered by the shutdown handler (e.g., Ctrl+C).
 
 - This workflow assumes **exclusive control over the trading symbol/account**. No manual trades or other bots should place trades for this symbol while the bot is running.
 - The bot relies solely on its internal state (tracked order IDs and positions) and cancels/closes any position or order it does not recognize.
+- In **hybrid mode**, the bot waits for terminal input for every trade entry. If no input is received (e.g., unattended), trades will not be executed. Manual/partial closes can be triggered via the CLI menu.
+- All exit conditions (SL, TP, max holding, reversal) are executed automatically, regardless of mode.
+
+---
