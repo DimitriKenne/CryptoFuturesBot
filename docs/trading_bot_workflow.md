@@ -1,9 +1,9 @@
 # Trading Bot - Complete Operational Workflow
 
 **Author:** DimitriKenne  
-**Date:** 2025-08-28 22:34:03 UTC
+**Date:** 2025-08-30 06:00:00 UTC (updated)
 
-This document outlines the definitive, end-to-end operational workflow for the live trading bot, including support for "Hybrid mode" with a robust CLI menu, improved input validation, and timeout handling for human-in-the-loop confirmation.
+This document outlines the definitive, end-to-end operational workflow for the live trading bot, including support for "Hybrid mode" with a robust CLI menu, improved input validation, timeout handling, and **robust SL/TP protection reconstruction** on startup.
 
 ---
 
@@ -25,14 +25,14 @@ This phase ensures the bot starts in a clean, known, and synchronized state usin
 
     *   **Phase B: Reconcile State & Enforce Protection**
         1.  **Reconcile Active Position:**
-            *   **Match Found:** If the exchange has one position matching the bot's loaded position (by order ID), it is adopted.
-            *   **Orphan Found:** If the exchange has a position but the bot has no state, a `CRITICAL` error is raised, and the bot stops. Manual intervention is required.
+            *   **Match Found:** If the exchange has one position matching the bot's loaded position (by order ID or price/qty), it is adopted.
+            *   **Orphan Found:** If the exchange has a position but the bot has no state, the position is adopted into bot state.
             *   **Ghost Found:** If the bot has a position in its state but the exchange does not, a `WARNING` is logged, and the position is cleared from the bot's state.
             *   **Multiple Positions:** If the exchange shows multiple positions, a `WARNING` is logged, and an attempt is made to close the smaller, unexpected positions to consolidate into one.
 
         2.  **Reconcile SL/TP Orders:**
             *   Based on the now-synced active position, the bot knows what its ideal SL/TP orders should be (by order ID).
-            *   **Missing Protection:** If an ideal SL or TP order is *missing* from the exchange, it is placed immediately.
+            *   **Missing Protection:** If an ideal SL or TP order is *missing* from the exchange, the bot IMMEDIATELY and AUTOMATICALLY **replaces all missing protection orders** using `TradeCycleProcessor.ensure_sltp_orders()`. The state is then saved.
             *   **Orphan Orders:** Any open order for the symbol on the exchange that is *not* the reconciled position's verified SL or TP order (by order ID) is considered an orphan and is cancelled.
 
 7. **Launch Main Loop:** Only after the state is fully reconciled and the position (if any) is confirmed to be protected by SL/TP orders does the main trading loop begin.
@@ -109,5 +109,6 @@ This is triggered by the shutdown handler (e.g., Ctrl+C).
 - The bot relies solely on its internal state (tracked order IDs and positions) and cancels/closes any position or order it does not recognize.
 - In **hybrid mode**, the bot waits for terminal input for every trade entry. If no input is received (e.g., unattended), trades will not be executed. Manual/partial closes can be triggered via the CLI menu.
 - All exit conditions (SL, TP, max holding, reversal) are executed automatically, regardless of mode.
+- **SL/TP protection is always enforced:** At startup, the bot will reconstruct missing SL/TP orders automatically using `TradeCycleProcessor.ensure_sltp_orders()` before entering main loop.
 
 ---
