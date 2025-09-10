@@ -1,7 +1,7 @@
 import asyncio
 import logging
 from typing import Dict, Any, Optional
-from datetime import datetime
+from datetime import datetime, timezone
 import pandas as pd
 
 from utils.data_management.data_manager import DataManager
@@ -68,36 +68,148 @@ class TradeCycleProcessor:
         """Checks for an exit condition and executes the close if triggered."""
         exit_triggered, reason, exit_price = self.trade_execution_engine.check_exit_conditions(position, candle_data, -1)
         if exit_triggered:
-            logger.info(f"Exit triggered for position {position['id']} due to: {reason}")
+            logger.info(f"Exit triggered for position {position.get('id', '<no-id>')} due to: {reason}")
             await self.execute_close_workflow(position, reason, exit_price)
 
     async def execute_close_workflow(self, position: Dict[str, Any], reason: str, exit_price: float):
-        """Implements the full close position workflow."""
-        logger.info(f"Executing close workflow for position {position['id']}.")
-        try:
-            await self.trade_execution_engine.cancel_remaining_orders(position, reason)
-            close_side = 'SELL' if position['direction_str'] == 'long' else 'BUY'
-            close_confirmation = await self.exchange_adapter.place_market_order(
-                symbol=self.symbol, side=close_side,
-                quantity=position['quantity'], reduce_only=True
-            )
-            finalized_trade = self.trade_execution_engine.calculate_exit_details(
-                open_trade=position, exit_price=close_confirmation['avgPrice'],
-                exit_time=close_confirmation['time'], exit_reason=reason
-            )
-            self.session_manager.close_position(finalized_trade)
-            await self.notifier.send_notification(
-                f"✅ TRADE CLOSED: {position.get('direction_str').upper()} {self.symbol}\n"
-                f"Exit @ {finalized_trade.get('exit_price',0):.4f}\n"
-                f"Net PnL: ${finalized_trade.get('net_pnl',0.0):.2f}\n"
-                f"Reason: {reason}\n"
-                f"Capital: ${self.session_manager.get_current_capital():.2f}",
-                level='info'
-            )
-        except (OrderExecutionError, ExchangeConnectionError) as e:
-            logger.error(f"Error executing close workflow for position {position['id']}: {e}", exc_info=True)
-            await self.notifier.send_notification(f"🚨 ERROR closing trade {position['id']}: {e}", level='error')
+        """
+        Implements the full close position workflow with exchange confirmation and orphan order cleanup.
+        Now updated: Only clears the position and sends 'closed' notification if position is confirmed closed on exchange.
+        """
+        logger.info(f"Executing close workflow for position {position.get('id', '<no-id>')}.")
 
+        try:
+            # 1. Attempt to cancel remaining SL/TP order(s)
+            try:
+                await self.trade_execution_engine.cancel_remaining_orders(position, reason)
+            except Exception as e:
+                logger.error(f"Error canceling SL/TP orders for position {position.get('id', '<no-id>')}: {e}")
+
+            # 2. Check if position is still open on exchange
+            try:
+                open_positions = await self.exchange_adapter.get_open_positions(self.symbol)
+            except Exception as e:
+                logger.error(f"Error fetching open positions: {e}")
+                await self.notifier.send_notification(
+                    f"🚨 ERROR: Unable to fetch open positions for {self.symbol}: {e}", level="critical"
+                )
+                # Do NOT mark as closed, return
+                return
+
+            position_still_open = False
+            for pos in open_positions:
+                if pos.get('symbol', '').upper() == self.symbol.upper() and float(pos.get('quantity', 0)) > 0:
+                    position_still_open = True
+                    break
+
+            if position_still_open:
+                close_side = 'SELL' if position['direction_str'] == 'long' else 'BUY'
+                try:
+                    close_order = await self.exchange_adapter.place_market_order(
+                        symbol=self.symbol, side=close_side,
+                        quantity=position['quantity'], reduce_only=True
+                    )
+                    order_id = close_order.get('orderId')
+                    elapsed = 0
+                    max_wait = 15  # seconds
+                    interval = 1.0 # seconds
+                    order_info = close_order
+                    while order_info.get('status') != 'FILLED' and elapsed < max_wait:
+                        await asyncio.sleep(interval)
+                        elapsed += interval
+                        order_info = await self.exchange_adapter.get_order_info(self.symbol, order_id)
+
+                    if order_info.get('status') == 'FILLED':
+                        # Mark as closed and send notification
+                        finalized_trade = self.trade_execution_engine.calculate_exit_details(
+                            open_trade=position, exit_price=order_info['avgPrice'],
+                            exit_time=order_info['time'], exit_reason=reason
+                        )
+                        self.session_manager.close_position(finalized_trade)
+                        await self.notifier.send_notification(
+                            f"✅ TRADE CLOSED: {position.get('direction_str').upper()} {self.symbol}\n"
+                            f"Exit @ {finalized_trade.get('exit_price',0):.4f}\n"
+                            f"Net PnL: ${finalized_trade.get('net_pnl',0.0):.2f}\n"
+                            f"Reason: {reason}\n"
+                            f"Capital: ${self.session_manager.get_current_capital():.2f}",
+                            level='info'
+                        )
+                    else:
+                        logger.error(f"Market close order {order_id} not filled after {max_wait} seconds. Position NOT marked as closed.")
+                        await self.notifier.send_notification(
+                            f"🚨 ERROR: Market close order {order_id} not filled after {max_wait}s. Trade NOT finalized. Position remains open.",
+                            level='critical'
+                        )
+                        return
+                except Exception as e:
+                    logger.error(f"Error executing market close for position {position['id']}: {e}", exc_info=True)
+                    await self.notifier.send_notification(
+                        f"🚨 ERROR closing trade {position['id']}: {e} Position remains open.", level='critical'
+                    )
+                    return
+
+            else:
+                # Already closed on exchange, get actual fill info if possible
+                logger.info(f"No open position found for {self.symbol} on exchange. Attempting to fetch order fill info for accurate exit details.")
+
+                order_id = None
+                exit_fill_info = None
+                if reason == 'stop_loss' and position.get("sl_order_id"):
+                    order_id = position["sl_order_id"]
+                elif reason == 'take_profit' and position.get("tp_order_id"):
+                    order_id = position["tp_order_id"]
+
+                if order_id:
+                    try:
+                        exit_fill_info = await self.exchange_adapter.get_order_info(self.symbol, order_id)
+                    except Exception as e:
+                        logger.warning(f"Could not fetch fill info for {reason} order {order_id}: {e}")
+
+                if exit_fill_info and exit_fill_info.get("status") == "FILLED":
+                    finalized_trade = self.trade_execution_engine.calculate_exit_details(
+                        open_trade=position,
+                        exit_price=exit_fill_info['avgPrice'],
+                        exit_time=exit_fill_info['time'],
+                        exit_reason=reason
+                    )
+                    self.session_manager.close_position(finalized_trade)
+                    await self.notifier.send_notification(
+                        f"✅ TRADE CLOSED: {position.get('direction_str').upper()} {self.symbol}\n"
+                        f"Exit @ {finalized_trade.get('exit_price',0):.4f}\n"
+                        f"Net PnL: ${finalized_trade.get('net_pnl',0.0):.2f}\n"
+                        f"Reason: {reason}\n"
+                        f"Capital: ${self.session_manager.get_current_capital():.2f}",
+                        level='info'
+                    )
+                else:
+                    # Fallback: Do NOT mark as closed, send error notification
+                    logger.warning(f"Could not confirm fill info for exit. Position NOT marked as closed.")
+                    await self.notifier.send_notification(
+                        f"🚨 ERROR: Could not confirm fill info for exit. Position NOT marked as closed for {self.symbol}.",
+                        level='critical'
+                    )
+                    return
+
+            # 5. Cleanup orphan orders after closure
+            try:
+                open_orders = await self.exchange_adapter.get_open_orders(self.symbol)
+                orphan_order_ids = [o['orderId'] for o in open_orders]
+                if orphan_order_ids:
+                    await self.exchange_adapter.cancel_multiple_orders(self.symbol, orphan_order_ids)
+                    logger.info(f"Cancelled orphan orders for {self.symbol}: {orphan_order_ids}")
+                    await self.notifier.send_notification(
+                        f"Cancelled orphan orders for {self.symbol}: {orphan_order_ids}", level='info'
+                    )
+            except Exception as e:
+                logger.error(f"Error cleaning up orphan orders: {e}")
+
+        except Exception as e:
+            logger.error(f"Error executing close workflow for position {position.get('id', '<no-id>')}: {e}", exc_info=True)
+            await self.notifier.send_notification(
+                f"🚨 ERROR during close workflow for trade {position.get('id', '<no-id>')}: {e}. Position NOT marked as closed.",
+                level='critical'
+            )
+         
     async def _handle_new_entry(self, candle_data: pd.Series):
         """Checks for a new entry signal and executes the entry workflow."""
         signal = int(candle_data.get('signal', 0))
@@ -261,26 +373,26 @@ class TradeCycleProcessor:
         sl_missing = not position.get("sl_order_id")
         tp_missing = not position.get("tp_order_id")
         symbol = position["symbol"]
-        side_to_close = "SELL" if position.get("direction_str") == "long" else "BUY"
+        side = position["side"]  # Use side directly
         quantity = position["quantity"]
 
-        entry_price = position["entryPrice"]
+        entry_price = position.get("entry_price") or position.get("entryPrice")
         latest_atr = None # Optionally fetch ATR from latest candle or features if needed
         stop_loss_price, take_profit_price = self.trade_execution_engine.trade_calculation_helpers.calculate_sl_tp_prices(
-            side=side_to_close.lower(), current_price=entry_price, latest_atr=latest_atr
+            side=side.lower(), current_price=entry_price, latest_atr=latest_atr
         )
 
         # Place missing SL
         if sl_missing:
             sl_order = await self.exchange_adapter.place_stop_market_order(
-                symbol=symbol, side=side_to_close, quantity=quantity, stop_price=stop_loss_price
+                symbol=symbol, side=side, quantity=quantity, stop_price=stop_loss_price
             )
             position["sl_order_id"] = sl_order["orderId"]
 
         # Place missing TP
         if tp_missing:
             tp_order = await self.exchange_adapter.place_take_profit_market_order(
-                symbol=symbol, side=side_to_close, quantity=quantity, stop_price=take_profit_price
+                symbol=symbol, side=side, quantity=quantity, stop_price=take_profit_price
             )
             position["tp_order_id"] = tp_order["orderId"]
 

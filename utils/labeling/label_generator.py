@@ -22,7 +22,7 @@ logger = logging.getLogger(__name__)
 
 # Dynamically Map Labeling Strategy Names to Strategy Classes
 LABELING_STRATEGY_MAP: Dict[str, Type[BaseLabelingStrategy]] = {}
-for i in range(1, 5):
+for i in range(1, 6):
     strategy_key = f'labeling_strategy_{i}'
     module_path = f'utils.labeling.strategies.strategy{i}'
     class_name = f'Strategy{i}'

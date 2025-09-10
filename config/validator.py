@@ -4,6 +4,7 @@ Call validate_config(config_instance) for any config object.
 """
 
 from config.feature import FeatureConfig, TemporalValidationConfig
+from config.label import LabelingStrategy1Config, LabelingStrategy2Config, LabelingStrategy3Config, LabelingStrategy4Config, LabelingStrategy5Config
 
 def validate_general_config(config):
     if not isinstance(config.random_seed, int):
@@ -192,12 +193,57 @@ def validate_model_config(config):
     validate_random_forest_params(config.random_forest_params)
     validate_lstm_params(config.lstm_params)
 
+def validate_label_strategy_1_config(config: LabelingStrategy1Config):
+    if not (0 <= config.take_profit_pct <= 1000):
+        raise ValueError("LabelingStrategy1Config: take_profit_pct must be 0-1000.")
+    if not (0 <= config.stop_loss_pct <= 1000):
+        raise ValueError("LabelingStrategy1Config: stop_loss_pct must be 0-1000.")
+    if not isinstance(config.lookahead_bars, int) or config.lookahead_bars <= 0:
+        raise ValueError("LabelingStrategy1Config: lookahead_bars must be a positive integer.")
+
+def validate_label_strategy_2_config(config: LabelingStrategy2Config):
+    if not (0 <= config.quantile_threshold_long_pct <= 100):
+        raise ValueError("LabelingStrategy2Config: quantile_threshold_long_pct must be 0-100.")
+    if not (0 <= config.quantile_threshold_short_pct <= 100):
+        raise ValueError("LabelingStrategy2Config: quantile_threshold_short_pct must be 0-100.")
+    if not isinstance(config.future_return_window, int) or config.future_return_window <= 0:
+        raise ValueError("LabelingStrategy2Config: future_return_window must be a positive integer.")
+
+def validate_label_strategy_3_config(config: LabelingStrategy3Config):
+    if not isinstance(config.future_return_window, int) or config.future_return_window <= 0:
+        raise ValueError("LabelingStrategy3Config: future_return_window must be a positive integer.")
+    if not (0 <= config.long_ratio_quantile_pct <= 100):
+        raise ValueError("LabelingStrategy3Config: long_ratio_quantile_pct must be 0-100.")
+    if not (0 <= config.short_ratio_quantile_pct <= 100):
+        raise ValueError("LabelingStrategy3Config: short_ratio_quantile_pct must be 0-100.")
+    if not (0 <= config.min_profit_threshold_pct <= 100):
+        raise ValueError("LabelingStrategy3Config: min_profit_threshold_pct must be 0-100.")
+
+def validate_label_strategy_4_config(config: LabelingStrategy4Config):
+    if not isinstance(config.n_clusters, int) or config.n_clusters <= 0:
+        raise ValueError("LabelingStrategy4Config: n_clusters must be a positive integer.")
+    if not isinstance(config.features_for_clustering, list):
+        raise TypeError("LabelingStrategy4Config: features_for_clustering must be a list.")
+    if not (0 < config.pca_n_components_pct <= 100):
+        raise ValueError("LabelingStrategy4Config: pca_n_components_pct must be in (0, 100].")
+    if not isinstance(config.cluster_to_label_mapping, dict):
+        raise TypeError("LabelingStrategy4Config: cluster_to_label_mapping must be a dict.")
+    if not isinstance(config.future_return_window, int) or config.future_return_window <= 0:
+        raise ValueError("LabelingStrategy4Config: future_return_window must be a positive integer.")
+
+def validate_label_strategy_5_config(config: LabelingStrategy5Config):
+    if not isinstance(config.htf_timeframe, str) or not config.htf_timeframe:
+        raise ValueError("LabelingStrategy5Config: htf_timeframe must be a non-empty string.")
+    if not (0 <= config.return_threshold_pct <= 100):
+        raise ValueError("LabelingStrategy5Config: return_threshold_pct must be 0-100.")
+
 def validate_label_config(config):
     if config.labeling_strategy_type not in [
         'labeling_strategy_1',
         'labeling_strategy_2',
         'labeling_strategy_3',
-        'labeling_strategy_4'
+        'labeling_strategy_4',
+        'labeling_strategy_5'
     ]:
         raise ValueError("labeling_strategy_type must be one of the supported strategies.")
     if config.min_holding_period < 1:
@@ -209,29 +255,11 @@ def validate_label_config(config):
     if not isinstance(config.analysis_future_horizons, list) or not all(isinstance(x, int) and x > 0 for x in config.analysis_future_horizons):
         raise ValueError("analysis_future_horizons must be a list of positive integers.")
 
-    s1 = config.labeling_strategy_1
-    if not (0 <= s1.profit_multiplier_pct <= 1000):
-        raise ValueError("LabelingStrategy1Config: profit_multiplier_pct must be 0-1000.")
-    if not (0 <= s1.stop_loss_multiplier_pct <= 1000):
-        raise ValueError("LabelingStrategy1Config: stop_loss_multiplier_pct must be 0-1000.")
-
-    s2 = config.labeling_strategy_2
-    if not (0 <= s2.quantile_threshold_long_pct <= 100):
-        raise ValueError("LabelingStrategy2Config: quantile_threshold_long_pct must be 0-100.")
-    if not (0 <= s2.quantile_threshold_short_pct <= 100):
-        raise ValueError("LabelingStrategy2Config: quantile_threshold_short_pct must be 0-100.")
-
-    s3 = config.labeling_strategy_3
-    if not (0 <= s3.long_ratio_quantile_pct <= 100):
-        raise ValueError("LabelingStrategy3Config: long_ratio_quantile_pct must be 0-100.")
-    if not (0 <= s3.short_ratio_quantile_pct <= 100):
-        raise ValueError("LabelingStrategy3Config: short_ratio_quantile_pct must be 0-100.")
-    if not (0 <= s3.min_profit_threshold_pct <= 100):
-        raise ValueError("LabelingStrategy3Config: min_profit_threshold_pct must be 0-100.")
-
-    s4 = config.labeling_strategy_4
-    if not (0 < s4.pca_n_components_pct <= 100):
-        raise ValueError("LabelingStrategy4Config: pca_n_components_pct must be 0-100.")
+    validate_label_strategy_1_config(config.labeling_strategy_1)
+    validate_label_strategy_2_config(config.labeling_strategy_2)
+    validate_label_strategy_3_config(config.labeling_strategy_3)
+    validate_label_strategy_4_config(config.labeling_strategy_4)
+    validate_label_strategy_5_config(config.labeling_strategy_5)
 
 def validate_risk_config(config):
     if config.initial_capital <= 0:

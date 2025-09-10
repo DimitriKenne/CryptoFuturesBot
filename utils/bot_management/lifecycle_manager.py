@@ -1,6 +1,7 @@
 import logging
 from typing import TYPE_CHECKING, Optional
 
+from config.params import app_config
 from utils.data_management.data_manager import DataManager
 from utils.exchange_adapters.exchange_interface import ExchangeInterface
 from utils.strategy_execution.live_trading_session_manager import LiveTradingSessionManager
@@ -84,29 +85,51 @@ class LifecycleManager:
 
         # 2. Orphan position on exchange (not in bot state): ADOPT and ensure SL/TP
         exchange_pos = exchange_positions[0] if exchange_positions else None
+        default_max_holding = app_config.trading.sltp.max_holding_period_bars_default or 0
         if exchange_pos and not bot_position:
             logger.warning("Orphan position found on exchange but not in bot state. Attempting adoption.")
+            logger.info(f"Exchange Position: {exchange_pos}")
             adopted_position = {
                 'symbol': self.symbol,
-                'direction': exchange_pos.get('direction'),
+                'direction_int': 1 if exchange_pos.get('direction') == 'long' else -1,
+                'direction_str': exchange_pos.get('direction'),
+                'side': 'BUY' if exchange_pos.get('direction') == 'long' else 'SELL',
+                'entry_price': exchange_pos.get('entryPrice'),
                 'quantity': exchange_pos.get('quantity'),
-                'entryPrice': exchange_pos.get('entryPrice'),
-                'unrealizedPnl': exchange_pos.get('unrealizedPnl'),
-                'leverage': exchange_pos.get('leverage'),
-                'entryMargin': exchange_pos.get('entryMargin'),
-                'liquidationPrice': exchange_pos.get('liquidationPrice'),
-                'entryTime': exchange_pos.get('entryTime'),
+                'notional_value': exchange_pos.get('entryPrice', 0) * exchange_pos.get('quantity', 0),
+                'liquidation_price': exchange_pos.get('liquidationPrice'),
+                'initial_margin': exchange_pos.get('entryMargin'),
+                'entry_time': exchange_pos.get('entryTime'),
+                # Defaults/unknowns:
+                'entry_fee': 0.0,
+                'max_holding_bars': default_max_holding,
+                'model_probabilities': {},
+                'entry_reason': 'adopted_from_exchange',
+                # These will be filled in below:
+                'stop_loss_price': None,
+                'take_profit_price': None,
+                'entry_order_id': None,
+                'sl_order_id': None,
+                'tp_order_id': None,
+                'id': None,
             }
-            # Try to find existing SL/TP orders (by reduceOnly and type)
-            sl_order = None
-            tp_order = None
+
+            # Now, loop for SL/TP orders:
+            sl_order, tp_order = None, None
             for order in exchange_orders:
-                if order.get('reduceOnly') and order.get('type') in ('STOP_MARKET', 'STOP'):
+                if order.get('type') in ('STOP_MARKET', 'STOP'):
                     sl_order = order
-                if order.get('reduceOnly') and order.get('type') in ('TAKE_PROFIT_MARKET', 'TAKE_PROFIT'):
+                if order.get('type') in ('TAKE_PROFIT_MARKET', 'TAKE_PROFIT'):
                     tp_order = order
-            adopted_position['sl_order_id'] = sl_order.get('orderId') if sl_order else None
-            adopted_position['tp_order_id'] = tp_order.get('orderId') if tp_order else None
+
+            if sl_order:
+                adopted_position['sl_order_id'] = sl_order['orderId']
+                adopted_position['stop_loss_price'] = sl_order.get('stopPrice')
+            if tp_order:
+                adopted_position['tp_order_id'] = tp_order['orderId']
+                adopted_position['take_profit_price'] = tp_order.get('stopPrice')
+
+            adopted_position['id'] = adopted_position['entry_order_id'] or adopted_position['sl_order_id'] or adopted_position['tp_order_id'] or f"adopted_{self.symbol}"
 
             self.session_manager.set_open_position(adopted_position)
             self.data_manager.save_bot_state(self.session_manager.get_state_as_dict(), self.model_type, self.symbol, self.interval)
@@ -163,7 +186,7 @@ class LifecycleManager:
 
         logger.info("--- State Reconciliation Complete ---")
 
-    async def shutdown(self, trade_cycle_processor: 'TradeCycleProcessor'):
+    async def shutdown(self):
         """Executes the graceful shutdown sequence."""
         logger.info("--- Bot Lifecycle: Shutdown Phase ---")
         open_position = self.session_manager.get_open_position()
@@ -171,10 +194,10 @@ class LifecycleManager:
             logger.info(f"Closing open position {open_position.get('id')} due to shutdown...")
             try:
                 latest_price = await self.exchange_adapter.get_latest_price(self.symbol)
-                await trade_cycle_processor.execute_close_workflow(open_position, "graceful_shutdown", latest_price)
+                await self.trade_cycle_processor.execute_close_workflow(open_position, "graceful_shutdown", latest_price)
             except ExchangeConnectionError as e:
                 logger.error(f"Could not get latest price during shutdown. Unable to close position cleanly: {e}")
 
-        trade_cycle_processor.save_current_state("shutdown")
+        self.trade_cycle_processor.save_current_state("shutdown")
         await self.exchange_adapter.close_connection()
         logger.info("Final state saved. Bot shutdown complete.")

@@ -1,5 +1,5 @@
 {
-    "model_type": "random_forest",
+    "model_type": "xgboost",
     "feature_columns_processed": [
         "num__open",
         "num__high",
@@ -311,10 +311,10 @@
             "random_forest": "Random Forest Classifier",
             "lstm": "LSTM Neural Network"
         },
-        "model_type": "random_forest",
+        "model_type": "xgboost",
         "features_to_use": null,
         "label_column": "label",
-        "train_test_split_ratio": 0.75,
+        "train_test_split_ratio": 0.79,
         "scaler_type": "minmax",
         "pca_enabled": false,
         "pca_n_components": 0.95,
@@ -365,20 +365,20 @@
             "dense_units": 32
         },
         "xgboost_tuning_params": {
-            "n_estimators": "<scipy.stats._distn_infrastructure.rv_discrete_frozen object at 0x00000237CBD90C80>",
-            "learning_rate": "<scipy.stats._distn_infrastructure.rv_continuous_frozen object at 0x00000237CBD91160>",
-            "max_depth": "<scipy.stats._distn_infrastructure.rv_discrete_frozen object at 0x00000237CBEA7620>",
-            "subsample": "<scipy.stats._distn_infrastructure.rv_continuous_frozen object at 0x00000237CBEA7650>",
-            "colsample_bytree": "<scipy.stats._distn_infrastructure.rv_continuous_frozen object at 0x00000237CBEA4260>"
+            "n_estimators": "<scipy.stats._distn_infrastructure.rv_discrete_frozen object at 0x0000025929D10740>",
+            "learning_rate": "<scipy.stats._distn_infrastructure.rv_continuous_frozen object at 0x0000025929D12150>",
+            "max_depth": "<scipy.stats._distn_infrastructure.rv_discrete_frozen object at 0x0000025929E91A90>",
+            "subsample": "<scipy.stats._distn_infrastructure.rv_continuous_frozen object at 0x0000025929E90590>",
+            "colsample_bytree": "<scipy.stats._distn_infrastructure.rv_continuous_frozen object at 0x0000025929E93C80>"
         },
         "random_forest_tuning_params": {
-            "n_estimators": "<scipy.stats._distn_infrastructure.rv_discrete_frozen object at 0x00000237CBEA7B60>",
-            "max_depth": "<scipy.stats._distn_infrastructure.rv_discrete_frozen object at 0x00000237CBEA5400>",
-            "min_samples_leaf": "<scipy.stats._distn_infrastructure.rv_discrete_frozen object at 0x00000237CBEA55B0>",
-            "min_samples_split": "<scipy.stats._distn_infrastructure.rv_discrete_frozen object at 0x00000237CBEA7C50>"
+            "n_estimators": "<scipy.stats._distn_infrastructure.rv_discrete_frozen object at 0x0000025929E91640>",
+            "max_depth": "<scipy.stats._distn_infrastructure.rv_discrete_frozen object at 0x0000025929E91970>",
+            "min_samples_leaf": "<scipy.stats._distn_infrastructure.rv_discrete_frozen object at 0x0000025929E935F0>",
+            "min_samples_split": "<scipy.stats._distn_infrastructure.rv_discrete_frozen object at 0x0000025929E906B0>"
         }
     },
     "training_history": null,
-    "save_timestamp": "2025-09-09 21:20:30",
+    "save_timestamp": "2025-09-01 15:04:47",
     "saved_by": "Dimitri"
 }

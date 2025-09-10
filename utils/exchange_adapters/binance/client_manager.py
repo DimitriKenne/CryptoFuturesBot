@@ -138,3 +138,16 @@ class BinanceAPIClientManager:
         Returns the connection status of the Binance AsyncClient.
         """
         return cls._is_connected
+    
+    async def periodic_time_sync(self, interval_seconds: int = 600):
+        """
+        Periodically synchronizes time with Binance server to prevent timestamp errors.
+        Should be launched as a background task after connecting.
+        """
+        while BinanceAPIClientManager._is_connected and BinanceAPIClientManager._instance:
+            try:
+                await BinanceAPIClientManager._instance.futures_time()
+                self.logger.debug("Binance API time sync successful.")
+            except Exception as e:
+                self.logger.warning(f"Failed Binance time sync: {e}")
+            await asyncio.sleep(interval_seconds)

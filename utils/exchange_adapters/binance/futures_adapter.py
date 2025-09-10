@@ -136,6 +136,10 @@ class BinanceFuturesAdapter(ExchangeInterface):
             # 5. Set leverage and margin mode
             await self.account_configurator.set_leverage()
             # await self.account_configurator.set_margin_mode()
+            
+            # 6. Start periodic time sync in the background
+            asyncio.create_task(self.client_manager.periodic_time_sync(interval_seconds=600))
+
 
             self.logger.info("Binance Futures API async setup complete.")
         except Exception as e:
@@ -327,7 +331,7 @@ class BinanceFuturesAdapter(ExchangeInterface):
                     entry_price = float(pos_info['entryPrice'])
                     unrealized_pnl = float(pos_info.get('unRealizedProfit', 0.0))
                     liquidation_price_raw = float(pos_info.get('liquidationPrice', 0.0))
-                    liquidation_price = liquidation_price_raw if liquidation_price_raw > 0 else np.nan
+                    liquidation_price = liquidation_price_raw if liquidation_price_raw > 0 else None
                     leverage = int(pos_info['leverage']) if pos_info.get('leverage') else self.leverage
                     entry_time = None # Binance API does not directly provide entry time for positions here
                     margin_val = pos_info.get('isolatedMargin')
@@ -796,4 +800,40 @@ class BinanceFuturesAdapter(ExchangeInterface):
         Closes the Binance AsyncClient connection by delegating to the client manager.
         """
         await self.client_manager.close_connection()
+
+    # Optional fall back if the order Id is not found
+    @async_retry_api_call()
+    async def get_last_closed_order(self, symbol: str) -> Optional[Dict[str, Any]]:
+        """
+        Retrieves the most recent FILLED order for the given symbol.
+        Returns None if not found.
+        """
+        client = self.client_manager.get_client
+        symbol = symbol.upper()
+        try:
+            # Fetch all orders for the symbol
+            orders = await client.futures_get_all_orders(symbol=symbol)
+            # Filter for FILLED orders
+            filled_orders = [o for o in orders if o.get('status') == 'FILLED' and float(o.get('executedQty', 0)) > 0]
+            if not filled_orders:
+                self.logger.info(f"No filled orders found for symbol {symbol}.")
+                return None
+            # Find the most recent by updateTime
+            filled_orders.sort(key=lambda o: o.get('updateTime', 0), reverse=True)
+            last_filled = filled_orders[0]
+            executed_qty = float(last_filled.get('executedQty', 0))
+            cum_quote = float(last_filled.get('cumQuote', 0))
+            avg_price = cum_quote / executed_qty if executed_qty > 0 else 0.0
+            return {
+                'orderId': str(last_filled.get('orderId')),
+                'symbol': last_filled.get('symbol'),
+                'status': last_filled.get('status'),
+                'executedQty': executed_qty,
+                'avgPrice': avg_price,
+                'cumQuote': cum_quote,
+                'time': pd.to_datetime(last_filled.get('updateTime'), unit='ms', utc=True)
+            }
+        except Exception as e:
+            self.logger.error(f"Error fetching last closed order for {symbol}: {e}", exc_info=True)
+            return None
 

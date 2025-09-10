@@ -132,8 +132,9 @@ class TradeCalculationHelpers:
 
 
     def calculate_sl_tp_prices(self, side: str, current_price: float, latest_atr: Optional[float]) -> Tuple[Optional[float], Optional[float]]:
+        atr_str = f"{latest_atr:.4f}" if latest_atr is not None else "None"
         self.logger.info(
-            f"🎯 SL/TP Calculation | Side: {side.upper()} | Price: {current_price:.4f} | ATR: {latest_atr:.4f}"
+            f"🎯 SL/TP Calculation | Side: {side.upper()} | Price: {current_price:.4f} | ATR: {atr_str}"
         )
 
         # Access SLTP config via self.config

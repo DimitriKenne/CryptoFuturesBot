@@ -35,7 +35,7 @@ class XGBoostParams:
     n_jobs: int = -1
     tree_method: str = 'hist'
     early_stopping_rounds: Optional[int] = None
-    class_balancing: Optional[Union[str, Dict[str, Any]]] = 'undersampling'
+    class_balancing: Optional[Union[str, Dict[str, Any]]] = "undersampling"
 @dataclass
 class RandomForestParams:
     n_estimators: int = 300
@@ -45,7 +45,7 @@ class RandomForestParams:
     random_state: int = 42
     n_jobs: int = -1
     oob_score: bool = True
-    class_balancing: Optional[Union[str, Dict[str, Any]]] = None
+    class_balancing: Optional[Union[str, Dict[str, Any]]] = 'oversampling'
 
 @dataclass
 class LSTMParams:
@@ -63,7 +63,7 @@ class LSTMParams:
     early_stopping_patience: Optional[int] = 50
     reduce_lr_on_plateau_factor: Optional[float] = 0.5
     reduce_lr_on_plateau_patience: Optional[int] = 25
-    class_balancing: Optional[Union[str, Dict[str, Any]]] = None
+    class_balancing: Optional[Union[str, Dict[str, Any]]] = 'oversampling'
     dense_units: Optional[int] = 32
 
 @dataclass
@@ -98,7 +98,7 @@ class ModelConfig:
     features_to_use: Optional[List[str]] = None
     label_column: str = 'label'
     train_test_split_ratio: float = 0.75
-    scaler_type: Optional[Literal['standard', 'minmax']] = 'standard'
+    scaler_type: Optional[Literal['standard', 'minmax']] = 'minmax'
     
     # --- MODIFIED/ADDED SECTION ---
     pca_enabled: bool = False  # Default to False, enable via CLI

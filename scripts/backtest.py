@@ -39,7 +39,7 @@ def main():
     parser = argparse.ArgumentParser(description="Run a backtest simulation for the trading bot.")
     parser.add_argument('--symbol', type=str, required=True, help='Trading symbol (e.g., BTCUSDT).')
     parser.add_argument('--interval', type=str, required=True, help='Data interval (e.g., 1h, 5m).')
-    parser.add_argument('--model', type=str, required=True, choices=list(app_config.model.AVAILABLE_MODEL_TYPES.keys()),
+    parser.add_argument('--model_type', type=str, required=True, choices=list(app_config.model.AVAILABLE_MODEL_TYPES.keys()),
                         help=f"Model type to use for signals. Available: {list(app_config.model.AVAILABLE_MODEL_TYPES.keys())}")
     parser.add_argument('--backtest_mode', type=str, default='test', choices=['full', 'train', 'test'],
                         help='Mode for backtest data split: full dataset, training set, or test set.')
@@ -48,7 +48,7 @@ def main():
 
     args = parser.parse_args()
 
-    logger.info(f"--- Backtest Script Started ({args.symbol} {args.interval} {args.model} mode: {args.backtest_mode}) ---")
+    logger.info(f"--- Backtest Script Started ({args.symbol} {args.interval} {args.model_type} mode: {args.backtest_mode}) ---")
 
     try:
         # --- 1. Validate Config ---
@@ -65,7 +65,7 @@ def main():
             app_config=app_config,
             symbol=args.symbol,
             interval=args.interval,
-            model_type=args.model,
+            model_type=args.model_type,
             backtest_mode=args.backtest_mode,
             train_ratio=args.train_ratio
         )
@@ -80,7 +80,7 @@ def main():
             equity_df=equity_df,
             symbol=args.symbol,
             interval=args.interval,
-            model_type=args.model
+            model_type=args.model_type
         )
         metrics_dict, plots_dict = analyzer.generate_analysis_artifacts()
         logger.info("Analysis complete. Metrics and plot figures generated.")
@@ -91,7 +91,7 @@ def main():
         # --- 5. Persist ---
         logger.info("Saving all backtest artifacts...")
         data_manager.save_backtest_artifacts(
-            model_type=args.model,
+            model_type=args.model_type,
             symbol=args.symbol,
             interval=args.interval,
             trades_df=trades_df,

@@ -269,6 +269,19 @@ class ExchangeInterface(ABC):
                                      Expected keys: 'orderId', 'symbol', 'status', 'executedQty', 'avgPrice', 'cumQuote'.
         """
         pass
+    
+    @abstractmethod
+    async def get_last_closed_order(self, symbol: str) -> Optional[Dict[str, Any]]:
+        """
+        Retrieves the most recent FILLED (closed) order for the given symbol.
+
+        Args:
+            symbol (str): Trading pair symbol.
+
+        Returns:
+            Optional[Dict[str, Any]]: Dictionary containing order details (e.g., 'orderId', 'avgPrice', 'executedQty', 'time'), or None if no recent closed order found.
+        """
+        pass
 
     @abstractmethod
     def adjust_quantity_precision(self, symbol: str, quantity: float) -> float:

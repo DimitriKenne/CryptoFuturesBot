@@ -182,19 +182,20 @@ class TradeExecutionEngine:
         entry_fee = notional_value * self.trading_fee_rate
 
         current_regime = current_bar_features.get(self.volatility_regime_col_name, 0)
+        default_max_holding = self.sltp_config.max_holding_period_bars_default or 0
         if pd.isna(current_regime):
-            self.logger.warning(f"Volatility regime for current bar is NaN. Defaulting max_holding_bars to 0 (no time limit).")
-            max_holding_bars = 0
+            self.logger.warning(f"Volatility regime for current bar is NaN. Defaulting max_holding_bars to {default_max_holding } (no time limit).")
+            max_holding_bars = default_max_holding
         else:
             try:
                 current_regime_int = int(current_regime)
-                max_holding_bars = self.volatility_regime_config.max_holding_bars.get(current_regime_int, 0)
+                max_holding_bars = self.volatility_regime_config.max_holding_bars.get(current_regime_int, default_max_holding)
                 if max_holding_bars is None:
-                    max_holding_bars = 0
-                    self.logger.warning(f"Max holding bars not configured for regime {current_regime_int}. Defaulting to 0.")
+                    max_holding_bars = default_max_holding
+                    self.logger.warning(f"Max holding bars not configured for regime {current_regime_int}. Defaulting to {default_max_holding}.")
             except (ValueError, TypeError):
-                self.logger.warning(f"Invalid volatility regime value '{current_regime}'. Defaulting max_holding_bars to 0.")
-                max_holding_bars = 0
+                self.logger.warning(f"Invalid volatility regime value '{current_regime}'. Defaulting max_holding_bars to {default_max_holding}.")
+                max_holding_bars = default_max_holding
 
         entry_details = {
             'symbol': self.symbol,  # will be None if not provided (backtest)

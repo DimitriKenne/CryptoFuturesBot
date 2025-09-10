@@ -53,15 +53,16 @@ class TradingBot:
         session_manager = LiveTradingSessionManager(app_config=config)
         trade_execution_engine = TradeExecutionEngine(app_config=config, exchange_adapter=exchange_adapter, symbol=self.symbol)
 
-        self.lifecycle_manager = LifecycleManager(
-            data_manager, exchange_adapter, session_manager,
-            self.model_type, self.symbol, self.interval
-        )
         self.trade_cycle_processor = TradeCycleProcessor(
             data_manager, market_data_handler, exchange_adapter, 
             session_manager, trade_execution_engine, self.notifier,
             self.model_type, self.symbol, self.interval, self.mode
         )
+        self.lifecycle_manager = LifecycleManager(
+            data_manager, exchange_adapter, session_manager,
+            self.model_type, self.symbol, self.interval, self.trade_cycle_processor
+        )
+
         logger.info("All bot components initialized.")
 
         # Calculate dynamic trade loop interval using polling_frequency_factor
@@ -175,7 +176,7 @@ class TradingBot:
     async def shutdown(self):
         """Performs a graceful shutdown of the trading bot."""
         self.logger.info("🛑 Initiating Trading Bot shutdown...")
-        await self.lifecycle_manager.shutdown(self.trade_cycle_processor)
+        await self.lifecycle_manager.shutdown()
         await self.notifier.send_notification(f"Trading Bot for {self.symbol}-{self.interval} has shut down.", level='info')
         self.logger.info("✅ Trading Bot shutdown complete.")
 
@@ -224,7 +225,11 @@ def main():
         logger.info("KeyboardInterrupt received. Graceful shutdown should be handled by the signal handler.")
     except Exception as e:
         logger.critical(f"A top-level unhandled exception occurred: {e}", exc_info=True)
-        asyncio.run(notifier.send_notification(f"Bot CRITICAL UNEXPECTED SHUTDOWN for {args.symbol}-{args.interval}: {e}", level='critical'))
+        # Try to send notification while loop is alive
+        try:
+            asyncio.run(notifier.send_notification(f"Bot CRITICAL UNEXPECTED SHUTDOWN for {args.symbol}-{args.interval}: {e}", level='critical'))
+        except Exception as notify_err:
+            logger.error(f"Failed to send error notification (loop may be closed): {notify_err}")
     finally:
         logger.info("--- Trading Bot Script Finished ---")
 
