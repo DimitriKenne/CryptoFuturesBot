@@ -314,7 +314,7 @@
         "model_type": "xgboost",
         "features_to_use": null,
         "label_column": "label",
-        "train_test_split_ratio": 0.79,
+        "train_test_split_ratio": 0.75,
         "scaler_type": "minmax",
         "pca_enabled": false,
         "pca_n_components": 0.95,
@@ -344,7 +344,7 @@
             "random_state": 42,
             "n_jobs": -1,
             "oob_score": true,
-            "class_balancing": null
+            "class_balancing": "undersampling"
         },
         "lstm_params": {
             "sequence_length_bars": 5,
@@ -361,24 +361,24 @@
             "early_stopping_patience": 50,
             "reduce_lr_on_plateau_factor": 0.5,
             "reduce_lr_on_plateau_patience": 25,
-            "class_balancing": null,
+            "class_balancing": "oversampling",
             "dense_units": 32
         },
         "xgboost_tuning_params": {
-            "n_estimators": "<scipy.stats._distn_infrastructure.rv_discrete_frozen object at 0x0000025929D10740>",
-            "learning_rate": "<scipy.stats._distn_infrastructure.rv_continuous_frozen object at 0x0000025929D12150>",
-            "max_depth": "<scipy.stats._distn_infrastructure.rv_discrete_frozen object at 0x0000025929E91A90>",
-            "subsample": "<scipy.stats._distn_infrastructure.rv_continuous_frozen object at 0x0000025929E90590>",
-            "colsample_bytree": "<scipy.stats._distn_infrastructure.rv_continuous_frozen object at 0x0000025929E93C80>"
+            "n_estimators": "<scipy.stats._distn_infrastructure.rv_discrete_frozen object at 0x000001438C0A3F20>",
+            "learning_rate": "<scipy.stats._distn_infrastructure.rv_continuous_frozen object at 0x000001438C06A930>",
+            "max_depth": "<scipy.stats._distn_infrastructure.rv_discrete_frozen object at 0x000001438C06B560>",
+            "subsample": "<scipy.stats._distn_infrastructure.rv_continuous_frozen object at 0x000001438C1B5A90>",
+            "colsample_bytree": "<scipy.stats._distn_infrastructure.rv_continuous_frozen object at 0x000001438C1B45C0>"
         },
         "random_forest_tuning_params": {
-            "n_estimators": "<scipy.stats._distn_infrastructure.rv_discrete_frozen object at 0x0000025929E91640>",
-            "max_depth": "<scipy.stats._distn_infrastructure.rv_discrete_frozen object at 0x0000025929E91970>",
-            "min_samples_leaf": "<scipy.stats._distn_infrastructure.rv_discrete_frozen object at 0x0000025929E935F0>",
-            "min_samples_split": "<scipy.stats._distn_infrastructure.rv_discrete_frozen object at 0x0000025929E906B0>"
+            "n_estimators": "<scipy.stats._distn_infrastructure.rv_discrete_frozen object at 0x000001438C1B7CB0>",
+            "max_depth": "<scipy.stats._distn_infrastructure.rv_discrete_frozen object at 0x000001438C1B5730>",
+            "min_samples_leaf": "<scipy.stats._distn_infrastructure.rv_discrete_frozen object at 0x000001438C1B58B0>",
+            "min_samples_split": "<scipy.stats._distn_infrastructure.rv_discrete_frozen object at 0x000001438C1B7890>"
         }
     },
     "training_history": null,
-    "save_timestamp": "2025-09-01 15:04:47",
+    "save_timestamp": "2025-09-15 00:26:31",
     "saved_by": "Dimitri"
 }

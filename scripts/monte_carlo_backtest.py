@@ -252,7 +252,7 @@ if __name__ == "__main__":
     parser.add_argument('--model', type=str, required=True, choices=list(app_config.model.AVAILABLE_MODEL_TYPES.keys()), help='Model key from app_config.model')
     parser.add_argument('--backtest_mode', type=str, default='test', choices=['full', 'train', 'test'], help='Data split to use for GARCH fitting and simulation length.')
     parser.add_argument('--train_ratio', type=float, default=app_config.model.train_test_split_ratio, help='Train/test split ratio.')
-    parser.add_argument('--num_simulations', type=int, default=100, help='Number of Monte Carlo simulations to run.')
+    parser.add_argument('--num_simulations', type=int, default=app_config.trading.backtest.monte_carlo_iterations, help='Number of Monte Carlo simulations to run.')
     # --- NEW: Argument to control the number of plotted simulations ---
     parser.add_argument('--num_plot_simulations', type=int, default=app_config.trading.backtest.monte_carlo_plot_simulations, 
                         help='Number of simulation paths to display on plots.')

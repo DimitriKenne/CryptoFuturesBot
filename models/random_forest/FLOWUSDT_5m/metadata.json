@@ -344,7 +344,7 @@
             "random_state": 42,
             "n_jobs": -1,
             "oob_score": true,
-            "class_balancing": "oversampling"
+            "class_balancing": "undersampling"
         },
         "lstm_params": {
             "sequence_length_bars": 5,
@@ -365,20 +365,20 @@
             "dense_units": 32
         },
         "xgboost_tuning_params": {
-            "n_estimators": "<scipy.stats._distn_infrastructure.rv_discrete_frozen object at 0x0000021827226330>",
-            "learning_rate": "<scipy.stats._distn_infrastructure.rv_continuous_frozen object at 0x0000021825F290A0>",
-            "max_depth": "<scipy.stats._distn_infrastructure.rv_discrete_frozen object at 0x0000021827392B10>",
-            "subsample": "<scipy.stats._distn_infrastructure.rv_continuous_frozen object at 0x00000218273901A0>",
-            "colsample_bytree": "<scipy.stats._distn_infrastructure.rv_continuous_frozen object at 0x0000021827391E80>"
+            "n_estimators": "<scipy.stats._distn_infrastructure.rv_discrete_frozen object at 0x0000019268D87560>",
+            "learning_rate": "<scipy.stats._distn_infrastructure.rv_continuous_frozen object at 0x0000019268D876E0>",
+            "max_depth": "<scipy.stats._distn_infrastructure.rv_discrete_frozen object at 0x0000019268DC1100>",
+            "subsample": "<scipy.stats._distn_infrastructure.rv_continuous_frozen object at 0x0000019269EAD490>",
+            "colsample_bytree": "<scipy.stats._distn_infrastructure.rv_continuous_frozen object at 0x0000019269EAC590>"
         },
         "random_forest_tuning_params": {
-            "n_estimators": "<scipy.stats._distn_infrastructure.rv_discrete_frozen object at 0x0000021827393A10>",
-            "max_depth": "<scipy.stats._distn_infrastructure.rv_discrete_frozen object at 0x0000021827393AD0>",
-            "min_samples_leaf": "<scipy.stats._distn_infrastructure.rv_discrete_frozen object at 0x00000218273916D0>",
-            "min_samples_split": "<scipy.stats._distn_infrastructure.rv_discrete_frozen object at 0x0000021827393440>"
+            "n_estimators": "<scipy.stats._distn_infrastructure.rv_discrete_frozen object at 0x0000019269EAFAA0>",
+            "max_depth": "<scipy.stats._distn_infrastructure.rv_discrete_frozen object at 0x0000019269EAF9E0>",
+            "min_samples_leaf": "<scipy.stats._distn_infrastructure.rv_discrete_frozen object at 0x0000019269EAD6D0>",
+            "min_samples_split": "<scipy.stats._distn_infrastructure.rv_discrete_frozen object at 0x0000019269EAFEC0>"
         }
     },
     "training_history": null,
-    "save_timestamp": "2025-09-09 21:30:45",
+    "save_timestamp": "2025-09-15 06:49:16",
     "saved_by": "Dimitri"
 }

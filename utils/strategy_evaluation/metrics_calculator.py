@@ -55,7 +55,7 @@ class MetricsCalculator:
 
         # Basic Equity Metrics
         final_equity = equity_df['equity'].iloc[-1]
-        metrics['Final Equity'] = f"{final_equity:.2f}"
+        metrics['Final Equity'] = f"{final_equity:.6f}"
         total_return = (final_equity - self.initial_capital) / self.initial_capital * 100 if self.initial_capital != 0 else 0
         metrics['Total Return (%)'] = total_return
         
@@ -109,8 +109,8 @@ class MetricsCalculator:
         drawdown = (equity_df['equity'] - rolling_max) / (rolling_max + FLOAT_EPSILON) * 100
         max_drawdown = drawdown.min()
         metrics['Max Drawdown (%)'] = max_drawdown
-        metrics['Peak Equity'] = f"{equity_df['equity'].max():.2f}"
-        metrics['Equity Change'] = f"{final_equity - self.initial_capital:.2f}"
+        metrics['Peak Equity'] = f"{equity_df['equity'].max():.6f}"
+        metrics['Equity Change'] = f"{final_equity - self.initial_capital:.6f}"
 
 
         # Trade-specific Metrics

@@ -234,8 +234,11 @@ def validate_label_strategy_4_config(config: LabelingStrategy4Config):
 def validate_label_strategy_5_config(config: LabelingStrategy5Config):
     if not isinstance(config.htf_timeframe, str) or not config.htf_timeframe:
         raise ValueError("LabelingStrategy5Config: htf_timeframe must be a non-empty string.")
-    if not (0 <= config.return_threshold_pct <= 100):
-        raise ValueError("LabelingStrategy5Config: return_threshold_pct must be 0-100.")
+    if not (0 <= config.bullish_quantile_pct <= 100):
+        raise ValueError("LabelingStrategy5Config: bullish_quantile_pct must be in 0-100.")
+    if not (0 <= config.bearish_quantile_pct <= 100):
+        raise ValueError("LabelingStrategy5Config: bearish_quantile_pct must be in 0-100.")
+
 
 def validate_label_config(config):
     if config.labeling_strategy_type not in [

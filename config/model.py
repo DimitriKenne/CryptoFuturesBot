@@ -45,7 +45,7 @@ class RandomForestParams:
     random_state: int = 42
     n_jobs: int = -1
     oob_score: bool = True
-    class_balancing: Optional[Union[str, Dict[str, Any]]] = 'oversampling'
+    class_balancing: Optional[Union[str, Dict[str, Any]]] = 'undersampling'
 
 @dataclass
 class LSTMParams:

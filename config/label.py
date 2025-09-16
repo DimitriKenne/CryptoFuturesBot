@@ -10,8 +10,8 @@ class LabelingStrategy1Config:
     Triple Barrier labeling with fixed % for TP/SL. All '_pct' fields are percentages (0-100).
     Supports both long and short directions.
     """
-    take_profit_pct: float = 6.0      # TP barrier as percent (e.g. 6 for +6%)
-    stop_loss_pct: float = 3.0        # SL barrier as percent (e.g. 3 for -3%)
+    take_profit_pct: float = 4.0      # TP barrier as percent (e.g. 6 for +6%)
+    stop_loss_pct: float = 1.5        # SL barrier as percent (e.g. 3 for -3%)
     lookahead_bars: int = 150          # Number of bars to look ahead for barrier hit
 
 
@@ -42,9 +42,13 @@ class LabelingStrategy4Config:
 
 @dataclass
 class LabelingStrategy5Config:
-    """HTF Context Return labeling. All '_pct' fields are percentages (0-100)."""
-    htf_timeframe: str = "1d"           # Higher timeframe, e.g. "1h"
-    return_threshold_pct: float = 1.0   # Required return before opposite HTF bar
+    """
+    HTF-LTF Context Quantile labeling for regime alignment.
+    All '_pct' fields are percentages (0-100).
+    """
+    htf_timeframe: str = "1d"           # Higher timeframe, e.g. "1d" for daily
+    bullish_quantile_pct: float = 50.0  # Quantile for bullish regime (e.g. 75 for 75th percentile)
+    bearish_quantile_pct: float = 35.0  # Quantile for bearish regime (e.g. 25 for 25th percentile)
 
 
 # --- Dynamically populate mapping of labeling strategy keys to their config dataclass types ---
@@ -78,7 +82,7 @@ class LabelConfig:
 
     trading_fee_pct: float = 0.05             # e.g. 0.05 for 0.05%
     slippage_tolerance_pct: float = 0.01      # e.g. 0.01 for 0.01%
-    analysis_future_horizons: List[int] = field(default_factory=lambda: [10, 30, 60, 100, 150])
+    analysis_future_horizons: List[int] = field(default_factory=lambda: [10, 30, 60, 100, 150, 300])
 
 # Default configuration instance
 DEFAULT_LABEL_CONFIG = LabelConfig()

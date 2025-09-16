@@ -4,8 +4,8 @@ from typing import Dict, Any, Optional, Literal
 # --- Sub-configs ---
 @dataclass
 class RiskConfig:
-    initial_capital: float = 98.0
-    risk_per_trade_pct: float = 5.0 # Percentage of capital to risk per trade
+    initial_capital: float = 100.0
+    risk_per_trade_pct: float = 3.0 # Percentage of capital to risk per trade
     leverage: int = 15
 
 @dataclass
@@ -18,11 +18,11 @@ class TradeExecutionConfig:
 @dataclass
 class EntryFilterConfig:
     confidence_filter_enabled: bool = True
-    confidence_threshold_long_pct: float = 60 # Confidence threshold for long entries (percentage)
-    confidence_threshold_short_pct: float = 60 # Confidence threshold for short entries (percentage)
-    volatility_regime_filter_enabled: bool = True
+    confidence_threshold_long_pct: float = 55 # Confidence threshold for long entries (percentage)
+    confidence_threshold_short_pct: float = 55 # Confidence threshold for short entries (percentage)
+    volatility_regime_filter_enabled: bool = False
     trend_filter_enabled: bool = False
-    trend_filter_ema_period: int = 20
+    trend_filter_ema_period: int = 50
     allow_long_trades: bool = True
     allow_short_trades: bool = True
 
@@ -35,7 +35,7 @@ class VolatilityRegimeConfig:
 class SLTPConfig:
     enabled: bool = False # Enable dynamic SLTP strategy
     volatility_window_bars: int = 20 # Window for ATR calculation
-    fixed_take_profit_pct: float = 6.0 # Fixed Take Profit as a percentage
+    fixed_take_profit_pct: float = 10.0 # Fixed Take Profit as a percentage
     fixed_stop_loss_pct: float = 3.0 # Fixed Stop Loss as a percentage
     alpha_take_profit: float = 14.0 # Multiplier for ATR-based TP
     alpha_stop_loss: float = 5.0 # Multiplier for ATR-based SL
@@ -52,7 +52,7 @@ class BacktestConfig:
     save_trades: bool = True
     save_equity_curve: bool = True
     save_metrics: bool = True
-    monte_carlo_iterations: int = 1000
+    monte_carlo_iterations: int = 5
     monte_carlo_seed: Optional[int] = None
     monte_carlo_plot_simulations: int = 20 # Number of MC simulations to plot
     override_strategy_params: Dict[str, Any] = field(default_factory=dict)
