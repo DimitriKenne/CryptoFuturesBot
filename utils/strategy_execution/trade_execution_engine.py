@@ -201,7 +201,7 @@ class TradeExecutionEngine:
             'symbol': self.symbol,  # will be None if not provided (backtest)
             'direction_int': filtered_signal,
             'direction_str': direction_str,
-            'side': 'BUY' if direction_str == 'long' else 'SELL',
+            'side': side.upper(),
             'entry_price': adjusted_entry_price,
             'quantity': adjusted_quantity,
             'notional_value': notional_value,

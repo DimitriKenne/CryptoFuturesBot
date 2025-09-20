@@ -642,8 +642,10 @@ class BinanceFuturesAdapter(ExchangeInterface):
         self.logger.info(f"Attempting to cancel {len(order_ids)} orders for {symbol}: {order_ids}")
 
         try:
-            order_id_list_json = json.dumps(order_ids) # Binance API expects orderIdList as JSON string
-            bulk_results = await client.futures_cancel_orders(symbol=symbol, orderIdList=order_id_list_json)
+            # Correctly format the list of order IDs into a list of integers
+            int_order_ids = [int(oid) for oid in order_ids]
+            # order_id_list_json = json.dumps(int_order_ids) # Binance API expects orderIdList as JSON string
+            bulk_results = await client.futures_cancel_orders(symbol=symbol, orderIdList=int_order_ids)
             self.logger.info(f"Bulk cancellation request sent for {symbol}. Results: {bulk_results}")
 
             # Process bulk results (Binance returns a list of dicts with status/code)

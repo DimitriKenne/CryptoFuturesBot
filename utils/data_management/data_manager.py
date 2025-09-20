@@ -11,6 +11,7 @@ from typing import Optional, Any, Dict, Union # Import Dict and Union
 from matplotlib.figure import Figure
 import json # Import json for metadata and evaluation results
 import dataclasses # Import dataclasses for the helper function
+import sqlite3 # Add this database module for transactional state management
 
 # Set up logging for the data manager
 logger = logging.getLogger(__name__)
@@ -66,6 +67,78 @@ def _dataclass_to_dict(obj: Any) -> Any:
         return obj
 
 
+class StateDBManager:
+    """
+    Manages the bot's state persistence in a transactional SQLite database.
+    This replaces the file-based state saving to ensure atomicity.
+    """
+    def __init__(self, db_path: Path):
+        self.db_path = db_path
+        self._ensure_db_and_table_exist()
+        
+        
+    def _ensure_db_and_table_exist(self):
+        """Connects to the database and creates the state table if it doesn't exist."""
+        try:
+            conn = sqlite3.connect(self.db_path)
+            cursor = conn.cursor()
+            cursor.execute("""
+                CREATE TABLE IF NOT EXISTS bot_state (
+                    id INTEGER PRIMARY KEY,
+                    state_data TEXT NOT NULL
+                )
+            """)
+            conn.commit()
+            conn.close()
+            logger.info(f"Database for session {self.db_path} ensured to be present.")
+        except sqlite3.Error as e:
+            logger.critical(f"Database error during setup: {e}")
+            raise
+
+    def save_bot_state(self, state: Dict[str, Any]):
+        """
+        Saves the bot's entire state to the database, overwriting any previous state.
+        This is a single, atomic transaction.
+        """
+        try:
+            conn = sqlite3.connect(self.db_path)
+            cursor = conn.cursor()
+            state_json = json.dumps(state)
+
+            conn.execute("BEGIN TRANSACTION")
+            cursor.execute("DELETE FROM bot_state")
+            cursor.execute("INSERT INTO bot_state (id, state_data) VALUES (?, ?)", (1, state_json))
+            conn.commit()
+            logger.info("Bot state successfully saved to the database.")
+        except sqlite3.Error as e:
+            logger.error(f"Failed to save bot state to database. Rolling back transaction: {e}")
+            conn.rollback()
+        finally:
+            conn.close()
+
+    def load_bot_state(self) -> Dict[str, Any]:
+        """
+        Loads the bot's state from the database. Returns an empty dict if no state is found.
+        """
+        try:
+            conn = sqlite3.connect(self.db_path)
+            cursor = conn.cursor()
+            cursor.execute("SELECT state_data FROM bot_state WHERE id = 1")
+            result = cursor.fetchone()
+            conn.close()
+            
+            if result:
+                state_json = result[0]
+                return json.loads(state_json)
+            else:
+                logger.warning(f"No previous bot state found at {self.db_path}. Starting from a clean slate.")
+                return {}
+        except sqlite3.Error as e:
+            logger.error(f"Failed to load bot state from database: {e}")
+            return {}
+        except json.JSONDecodeError as e:
+            logger.error(f"Failed to decode bot state from database: {e}")
+            return {}
 
 class DataManager:
     """
@@ -300,23 +373,25 @@ class DataManager:
             self.logger.error(f"Failed to save config.yaml: {e}", exc_info=True)
 
     def save_bot_state(self, state: Dict[str, Any], model_type: str, symbol: str, interval: str):
-        """Saves the bot's current state (capital, open positions) to a JSON file."""
+        """Saves the bot's current state to a transactional SQLite database."""
         run_dir = self.get_live_trading_dir(model_type, symbol, interval)
         filename = self.path_config['patterns']['live_trading_state']
         file_path = run_dir / filename
+        
         self.logger.info(f"Saving bot state to: {file_path}")
         try:
             file_path.parent.mkdir(parents=True, exist_ok=True)
+            # Instantiate the new transactional manager and save the state
+            state_db_manager = StateDBManager(file_path)
             sanitized_state = self._sanitize_for_json(state)
-            with open(file_path, 'w') as f:
-                json.dump(sanitized_state, f, indent=4)
+            state_db_manager.save_bot_state(sanitized_state)
             self.logger.info("Successfully saved bot state.")
         except Exception as e:
             self.logger.error(f"Failed to save bot state to {file_path}: {e}", exc_info=True)
             raise OSError(f"Failed to save bot state to {file_path}: {e}")
 
     def load_bot_state(self, model_type: str, symbol: str, interval: str) -> Optional[Dict[str, Any]]:
-        """Loads the bot's state from a JSON file."""
+        """Loads the bot's state from a transactional SQLite database."""
         run_dir = self.get_live_trading_dir(model_type, symbol, interval)
         filename = self.path_config['patterns']['live_trading_state']
         file_path = run_dir / filename
@@ -327,13 +402,11 @@ class DataManager:
         
         self.logger.info(f"Loading bot state from: {file_path}")
         try:
-            with open(file_path, 'r') as f:
-                state = json.load(f)
+            # Instantiate the new transactional manager and load the state
+            state_db_manager = StateDBManager(file_path)
+            state = state_db_manager.load_bot_state()
             self.logger.info("Successfully loaded bot state.")
             return state
-        except json.JSONDecodeError as e:
-            self.logger.error(f"Failed to decode JSON from state file {file_path}: {e}", exc_info=True)
-            return None
         except Exception as e:
             self.logger.error(f"Failed to load bot state from {file_path}: {e}", exc_info=True)
             return None

@@ -84,7 +84,7 @@ PATH_CONFIG = {
         'live_trades': "trades.parquet",
         'live_equity': "equity.parquet",
         'live_metrics_json': "summary_metrics.json",
-        'live_trading_state': "state.json", # NEW: For saving bot state
+        'live_trading_state': "bot_state.db", # NEW: For saving bot state
         
         # --- Visualization File Pattern ---
         'trade_visualization_json': "trade_visualization_data.json",

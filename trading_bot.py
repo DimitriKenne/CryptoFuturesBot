@@ -60,7 +60,7 @@ class TradingBot:
         )
         self.lifecycle_manager = LifecycleManager(
             data_manager, exchange_adapter, session_manager,
-            self.model_type, self.symbol, self.interval, self.trade_cycle_processor
+            self.model_type, self.symbol, self.interval, self.trade_cycle_processor, self.notifier
         )
 
         logger.info("All bot components initialized.")

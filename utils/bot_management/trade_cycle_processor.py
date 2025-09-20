@@ -3,6 +3,7 @@ import logging
 from typing import Dict, Any, Optional
 from datetime import datetime, timezone
 import pandas as pd
+import uuid  
 
 from utils.data_management.data_manager import DataManager
 from utils.exchange_adapters.exchange_interface import ExchangeInterface
@@ -68,7 +69,7 @@ class TradeCycleProcessor:
         """Checks for an exit condition and executes the close if triggered."""
         exit_triggered, reason, exit_price = self.trade_execution_engine.check_exit_conditions(position, candle_data, -1)
         if exit_triggered:
-            logger.info(f"Exit triggered for position {position.get('id', '<no-id>')} due to: {reason}")
+            logger.info(f"Exit triggered for position {position.get('trade_id', '<no-id>')} due to: {reason}")
             await self.execute_close_workflow(position, reason, exit_price)
 
     async def execute_close_workflow(self, position: Dict[str, Any], reason: str, exit_price: float):
@@ -76,14 +77,14 @@ class TradeCycleProcessor:
         Implements the full close position workflow with exchange confirmation and orphan order cleanup.
         Now updated: Only clears the position and sends 'closed' notification if position is confirmed closed on exchange.
         """
-        logger.info(f"Executing close workflow for position {position.get('id', '<no-id>')}.")
+        logger.info(f"Executing close workflow for position {position.get('trade_id', '<no-id>')}.")
 
         try:
             # 1. Attempt to cancel remaining SL/TP order(s)
             try:
                 await self.trade_execution_engine.cancel_remaining_orders(position, reason)
             except Exception as e:
-                logger.error(f"Error canceling SL/TP orders for position {position.get('id', '<no-id>')}: {e}")
+                logger.error(f"Error canceling SL/TP orders for position {position.get('trade_id', '<no-id>')}: {e}")
 
             # 2. Check if position is still open on exchange
             try:
@@ -142,9 +143,9 @@ class TradeCycleProcessor:
                         )
                         return
                 except Exception as e:
-                    logger.error(f"Error executing market close for position {position['id']}: {e}", exc_info=True)
+                    logger.error(f"Error executing market close for position {position.get('trade_id', '<no-id>')}: {e}", exc_info=True)
                     await self.notifier.send_notification(
-                        f"🚨 ERROR closing trade {position['id']}: {e} Position remains open.", level='critical'
+                        f"🚨 ERROR closing trade {position.get('trade_id', '<no-id>')}: {e} Position remains open.", level='critical'
                     )
                     return
 
@@ -204,9 +205,9 @@ class TradeCycleProcessor:
                 logger.error(f"Error cleaning up orphan orders: {e}")
 
         except Exception as e:
-            logger.error(f"Error executing close workflow for position {position.get('id', '<no-id>')}: {e}", exc_info=True)
+            logger.error(f"Error executing close workflow for position {position.get( 'trade_id', '<no-id>')}: {e}", exc_info=True)
             await self.notifier.send_notification(
-                f"🚨 ERROR during close workflow for trade {position.get('id', '<no-id>')}: {e}. Position NOT marked as closed.",
+                f"🚨 ERROR during close workflow for trade {position.get( 'trade_id', '<no-id>')}: {e}. Position NOT marked as closed.",
                 level='critical'
             )
          
@@ -226,8 +227,14 @@ class TradeCycleProcessor:
             current_bar_features=candle_data,
             model_probabilities=pd.Series(model_probabilities)
         )
+        
         if not trade_plan:
             return
+        
+        # --- NEW: Generate a unique trade_id for this trade session ---
+        trade_id = str(uuid.uuid4())
+        trade_plan['trade_id'] = trade_id
+        logger.info(f"New trade initiated with unique ID: {trade_id}")
         
         if self.mode == "hybrid":
             confirmed = await self.hybrid_menu(trade_plan)
@@ -365,15 +372,21 @@ class TradeCycleProcessor:
             print(menu_text)
             return await self.hybrid_menu(trade_plan, timeout)
         return False
-    
-    
+
+    # Ensure SL/TP orders are in place for a live position during the reconciliation startup
     async def ensure_sltp_orders(self, position: Dict[str, Any]):
         """Detects and replaces missing SL/TP orders for a live position."""
 
         sl_missing = not position.get("sl_order_id")
         tp_missing = not position.get("tp_order_id")
+        
+        if not sl_missing and not tp_missing:
+            logger.info("Both SL and TP orders already exist. No action needed.")
+            return
+        
         symbol = position["symbol"]
         side = position["side"]  # Use side directly
+        side_to_close = 'SELL' if side == 'BUY' else 'BUY'
         quantity = position["quantity"]
 
         entry_price = position.get("entry_price") or position.get("entryPrice")
@@ -381,28 +394,27 @@ class TradeCycleProcessor:
         stop_loss_price, take_profit_price = self.trade_execution_engine.trade_calculation_helpers.calculate_sl_tp_prices(
             side=side.lower(), current_price=entry_price, latest_atr=latest_atr
         )
-
+        position["stop_loss_price"] = stop_loss_price
+        position["take_profit_price"] = take_profit_price
+        
         # Place missing SL
         if sl_missing:
+            logger.info(f"SL order ID not found. Placing new SL order for position {position.get('trade_id', '<no-id>')} at price {stop_loss_price}.")
             sl_order = await self.exchange_adapter.place_stop_market_order(
-                symbol=symbol, side=side, quantity=quantity, stop_price=stop_loss_price
+                symbol=symbol, side=side_to_close, quantity=quantity, stop_price=stop_loss_price
             )
             position["sl_order_id"] = sl_order["orderId"]
 
         # Place missing TP
         if tp_missing:
+            logger.info(f"TP order ID not found. Placing new TP order for position {position.get('trade_id', '<no-id>')} at price {take_profit_price}.")
             tp_order = await self.exchange_adapter.place_take_profit_market_order(
-                symbol=symbol, side=side, quantity=quantity, stop_price=take_profit_price
+                symbol=symbol, side=side_to_close, quantity=quantity, stop_price=take_profit_price
             )
             position["tp_order_id"] = tp_order["orderId"]
 
         # Update the session manager state
         self.session_manager.set_open_position(position)
 
-        # Persist using data_manager (the ONLY way to save state)
-        self.data_manager.save_bot_state(
-            self.session_manager.get_state_as_dict(),
-            self.model_type, self.symbol, self.interval
-        )
-
-        logger.info("Replaced missing SL/TP orders and persisted updated bot state.")
+        self.save_current_state("sl_tp_reconciliation_complete")
+        

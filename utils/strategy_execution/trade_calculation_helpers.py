@@ -167,7 +167,7 @@ class TradeCalculationHelpers:
         min_sl_tp_pct_rate = self.config.trading.sltp.min_sl_tp_pct / 100.0
         sl_pct_fraction = max(sl_pct_fraction, min_sl_tp_pct_rate)
         tp_pct_fraction = max(tp_pct_fraction, min_sl_tp_pct_rate)
-
+        self.logger.info(f"Final SL%={sl_pct_fraction*100:.4f}, TP%={tp_pct_fraction*100:.4f} after applying minimums.")   
 
         # Final check on calculated fractions
         if sl_pct_fraction <= FLOAT_EPSILON:
