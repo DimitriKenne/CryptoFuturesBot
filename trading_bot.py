@@ -183,11 +183,11 @@ class TradingBot:
 def main():
     """Main function to parse arguments and run the trading bot."""
     parser = argparse.ArgumentParser(description="Run a live trading bot.")
-    parser.add_argument('--symbol', type=str, required=True, help='Trading symbol (e.g., BTCUSDT).')
+    parser.add_argument('--symbol', type=str, required=True, default= app_config.trading.symbol, help='Trading symbol (e.g., BTCUSDT).')
     parser.add_argument('--interval', type=str, required=True, choices=[
         '1m', '5m', '15m', '30m', '1h', '2h', '4h', '6h', '8h', '12h', '1d', '3d', '1w', '1M'
-    ], help='Time interval (e.g., 1h, 1d).')
-    parser.add_argument('--model_type', type=str, required=True, choices=list(app_config.model.AVAILABLE_MODEL_TYPES.keys()), default=app_config.model.model_type, help='Model key from app_config.model (e.g., xgboost, lstm).')
+    ], default=app_config.trading.interval, help='Time interval (e.g., 1h, 1d).')
+    parser.add_argument('--model_type', type=str, required=True, choices=list(app_config.model.AVAILABLE_MODEL_TYPES.keys()), default=app_config.trading.model_type, help='Model key from app_config.model (e.g., xgboost, lstm).')
     # Add to CLI arguments:
     parser.add_argument('--mode', type=str, choices=['automatic', 'hybrid'], default='automatic', help='Trading bot mode: automatic or hybrid.')
     

@@ -63,6 +63,13 @@ class TradingConfig:
     """
     Aggregated trading strategy and backtesting configurations.
     """
+    
+    # Symbol and model settings
+    symbol: str = "1000SHIBUSDT"
+    interval: str = "5m"
+    model_type: Literal['random_forest', 'xgboost', 'lstm'] = 'random_forest'
+
+    # Risk management settings
     risk: RiskConfig = field(default_factory=RiskConfig)
     trade_execution: TradeExecutionConfig = field(default_factory=TradeExecutionConfig)
     entry_filter: EntryFilterConfig = field(default_factory=EntryFilterConfig)
