@@ -1,4 +1,4 @@
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, is_dataclass
 from typing import Dict, Any, Optional, Literal
 
 # --- Sub-configs ---
@@ -77,6 +77,51 @@ class TradingConfig:
     sltp: SLTPConfig = field(default_factory=SLTPConfig)
     backtest: BacktestConfig = field(default_factory=BacktestConfig)
     bars_per_year: int = 105120 # Number of bars in a year for annualization
+    
+    
+    @classmethod
+    def from_dict(cls, data: Dict[str, Any]):
+        """
+        Recursively creates a TradingConfig instance from a dictionary.
+        
+        This method is designed to handle nested dataclasses, ensuring that a dictionary
+        input can be fully transformed into a valid, frozen TradingConfig object.
+        
+        Args:
+            data: A dictionary containing new configuration values.
+            
+        Returns:
+            A new, frozen TradingConfig instance.
+        """
+        # Dictionary to hold keyword arguments for the outer dataclass
+        kwargs = {}
+        # Iterate over the fields of the dataclass
+        for field_name, field_type in cls.__annotations__.items():
+            # Check if the field is a nested dataclass
+            # Note: We need to get the class from the field_type's argument if it's a field()
+            actual_type = field_type.__args__[0] if getattr(field_type, '__origin__', None) is field else field_type
+            
+            if is_dataclass(actual_type):
+                # If it's a nested dataclass, recurse
+                if field_name in data and isinstance(data[field_name], dict):
+                    nested_data = data[field_name]
+                    # Get the default instance of the nested dataclass to merge
+                    default_instance = getattr(cls(), field_name)
+                    # Merge default values with provided overrides
+                    merged_data = {**default_instance.__dict__, **nested_data}
+                    kwargs[field_name] = actual_type.from_dict(merged_data)
+                else:
+                    # If not provided, use the default factory
+                    kwargs[field_name] = field_type.default_factory() if 'default_factory' in str(field_type) else actual_type()
+            else:
+                # For non-dataclass fields, just use the value from the dictionary or default
+                if field_name in data:
+                    kwargs[field_name] = data[field_name]
+                else:
+                    # Get the default value from the class
+                    kwargs[field_name] = getattr(cls(), field_name)
+        
+        return cls(**kwargs)
 
 # Default config instance
 DEFAULT_TRADING_CONFIG = TradingConfig()

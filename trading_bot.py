@@ -6,6 +6,7 @@ import argparse
 import sys
 import re
 from pathlib import Path
+import json
 
 # Add project root to Python path
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
@@ -14,6 +15,7 @@ if str(PROJECT_ROOT) not in sys.path:
 
 # --- Configuration and Core Components ---
 from config.params import app_config, AppConfig
+from config.trading import TradingConfig
 from config.validator import validate_config
 from utils.data_management.data_manager import DataManager
 from utils.exchange_adapters.binance.futures_adapter import BinanceFuturesAdapter
@@ -188,22 +190,56 @@ def main():
         '1m', '5m', '15m', '30m', '1h', '2h', '4h', '6h', '8h', '12h', '1d', '3d', '1w', '1M'
     ], default=app_config.trading.interval, help='Time interval (e.g., 1h, 1d).')
     parser.add_argument('--model_type', type=str, required=True, choices=list(app_config.model.AVAILABLE_MODEL_TYPES.keys()), default=app_config.trading.model_type, help='Model key from app_config.model (e.g., xgboost, lstm).')
-    # Add to CLI arguments:
     parser.add_argument('--mode', type=str, choices=['automatic', 'hybrid'], default='automatic', help='Trading bot mode: automatic or hybrid.')
-    
-    args = parser.parse_args()
+        # --- Configuration File Argument ---
+    parser.add_argument(
+        "--config_file",
+        type=str,
+        help=(
+            "The path to a JSON file to override the default configuration.\n"
+            "This file must contain a valid JSON object."
+        )
+    )
 
+    args = parser.parse_args()
+    
     logger.info(f"--- Trading Bot Script Started ({args.symbol} {args.interval} {args.model_type}) ---")
 
+    # --- Load and Apply Configuration ---
+    current_app_config = app_config  # Start with the default global config
+
+    if args.config_file:
+        try:
+            config_file_path = Path(args.config_file)
+            if not config_file_path.is_file():
+                raise FileNotFoundError(f"Configuration file not found at: {config_file_path}")
+            
+            with open(config_file_path, 'r') as f:
+                override_data = json.load(f)
+            
+            # Use AppConfig's __init__ to merge the configurations
+            current_app_config = AppConfig(**{
+                **current_app_config.__dict__,
+                **override_data,
+            })
+            logger.info(f"Configuration overridden with JSON file from: {args.config_file}")
+        except FileNotFoundError as e:
+            logger.critical(e, exc_info=True)
+            sys.exit(1)
+        except json.JSONDecodeError as e:
+            logger.critical(f"Invalid JSON format in file {args.config_file}: {e}", exc_info=True)
+            sys.exit(1)
+
+    # Validate the final configuration
     try:
-        validate_config(app_config)
+        validate_config(current_app_config)
     except (ValueError, TypeError) as e:
         logger.critical(f"Invalid application configuration: {e}", exc_info=True)
         sys.exit(1)
 
-    notifier = NotificationManager(config=app_config.notifier.__dict__)
+    notifier = NotificationManager(config=current_app_config.notifier.__dict__)
     bot = TradingBot(
-        config=app_config,
+        config=current_app_config,
         symbol=args.symbol,
         interval=args.interval,
         model_type=args.model_type,
@@ -232,6 +268,7 @@ def main():
             logger.error(f"Failed to send error notification (loop may be closed): {notify_err}")
     finally:
         logger.info("--- Trading Bot Script Finished ---")
+
 
 if __name__ == "__main__":
     main()

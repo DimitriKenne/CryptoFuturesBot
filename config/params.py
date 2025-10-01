@@ -11,8 +11,9 @@ Central configuration aggregator for the trading bot.
 
 import os
 import logging
+from typing import Any, Dict
 from dotenv import load_dotenv, find_dotenv
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, is_dataclass
 
 # Load environment variables first
 load_dotenv(find_dotenv())
@@ -59,6 +60,32 @@ class AppConfig:
             if isinstance(val, dict):
                 object.__setattr__(self, attr, cls(**val))
         # Validation is handled in config/validator.py
+        
+    @classmethod
+    def from_dict(cls, data: Dict[str, Any]) -> 'AppConfig':
+        """
+        Creates an AppConfig instance from a dictionary,
+        recursively instantiating nested dataclasses from their
+        corresponding dictionary keys.
+        """
+        kwargs = {}
+        for field_name, field_type in cls.__annotations__.items():
+            # Get the actual class if it's a field with a default_factory
+            actual_type = field_type.__args__[0] if getattr(field_type, '__origin__', None) is field else field_type
+            
+            # Check if the field is a nested dataclass
+            if is_dataclass(actual_type):
+                # Use a specific from_dict method if it exists, otherwise instantiate
+                if 'from_dict' in dir(actual_type) and isinstance(data.get(field_name), dict):
+                    kwargs[field_name] = actual_type.from_dict(data.get(field_name, {}))
+                else:
+                    kwargs[field_name] = actual_type(**data.get(field_name, {}))
+            else:
+                # For non-dataclass fields, just use the value from the dictionary
+                if field_name in data:
+                    kwargs[field_name] = data[field_name]
+        
+        return cls(**kwargs)
 
 # Global config instance
 app_config = AppConfig(

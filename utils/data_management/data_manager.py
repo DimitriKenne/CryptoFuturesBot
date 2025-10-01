@@ -453,5 +453,37 @@ class DataManager:
         path = analysis_dir / filename
         self.logger.info(f"Saving plot '{plot_type}' to: {path}")
         fig.savefig(path, dpi=150, bbox_inches='tight')
+        
+    # =========================================================================
+    # --- New: Configuration Management ---
+    # =========================================================================
+    def save_app_config(self, config_data: Dict[str, Any], model_type: str, symbol: str, interval: str) -> Path:
+        """
+        Saves the application configuration dictionary to a JSON file
+        in the live trading run directory.
+
+        Args:
+            config_data: The dictionary containing the configuration.
+            model_type (str): The type of model (e.g., 'random_forest').
+            symbol (str): The trading symbol (e.g., 'BTCUSDT').
+            interval (str): The data interval (e.g., '5m').
+        
+        Returns:
+            The full Path object of the saved file.
+        """
+        run_dir = self.get_live_trading_dir(model_type, symbol, interval)
+        filename_pattern = self.path_config['patterns']['bot_config_file']
+        filename = filename_pattern.format(symbol=symbol, interval=interval)
+        file_path = run_dir / filename
+        
+        self.logger.info(f"Saving user configuration to: {file_path}")
+        try:
+            with open(file_path, 'w') as f:
+                json.dump(config_data, f, indent=4)
+            self.logger.info(f"Successfully saved configuration file.")
+            return file_path
+        except Exception as e:
+            self.logger.error(f"Failed to save configuration file to {file_path}: {e}", exc_info=True)
+            raise
 
 
