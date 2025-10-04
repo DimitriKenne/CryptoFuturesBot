@@ -198,6 +198,14 @@ class DataManager:
         """Gets the unique directory for a specific live trading run."""
         return self._get_run_dir('live_trading', 'live_trading_run_dir', model_type=model_type, symbol=symbol, interval=interval)
 
+    def get_bot_state_path(self, model_type: str, symbol: str, interval: str) -> Path:
+        """
+        Constructs the path to the bot state database file.
+        """
+        run_dir = self.get_live_trading_dir(model_type, symbol, interval)
+        file_name = self.path_config['patterns']['live_trading_state']
+        return run_dir / file_name
+    
     def load_dataframe(self, data_type: str, **kwargs) -> Optional[pd.DataFrame]:
         # Path logic (modern)
         directory = Path(self.path_config['directories'][data_type])
@@ -374,9 +382,7 @@ class DataManager:
 
     def save_bot_state(self, state: Dict[str, Any], model_type: str, symbol: str, interval: str):
         """Saves the bot's current state to a transactional SQLite database."""
-        run_dir = self.get_live_trading_dir(model_type, symbol, interval)
-        filename = self.path_config['patterns']['live_trading_state']
-        file_path = run_dir / filename
+        file_path = self.get_bot_state_path(model_type, symbol, interval)
         
         self.logger.info(f"Saving bot state to: {file_path}")
         try:
@@ -392,10 +398,8 @@ class DataManager:
 
     def load_bot_state(self, model_type: str, symbol: str, interval: str) -> Optional[Dict[str, Any]]:
         """Loads the bot's state from a transactional SQLite database."""
-        run_dir = self.get_live_trading_dir(model_type, symbol, interval)
-        filename = self.path_config['patterns']['live_trading_state']
-        file_path = run_dir / filename
-        
+        file_path = self.get_bot_state_path(model_type, symbol, interval)
+
         if not file_path.exists():
             self.logger.warning(f"Bot state file not found at: {file_path}. Will start with initial capital.")
             return None

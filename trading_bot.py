@@ -1,4 +1,5 @@
 import asyncio
+from dataclasses import asdict
 from html import parser
 import logging
 import signal
@@ -215,21 +216,35 @@ def main():
                 raise FileNotFoundError(f"Configuration file not found at: {config_file_path}")
             
             with open(config_file_path, 'r') as f:
-                override_data = json.load(f)
+                override_trading_data = json.load(f)
             
-            # Use AppConfig's __init__ to merge the configurations
-            current_app_config = AppConfig(**{
-                **current_app_config.__dict__,
-                **override_data,
+            # Create a new TradingConfig instance by merging the default trading config
+            # with the data from the JSON file. This is the key step.
+            new_trading_config = TradingConfig.from_dict({
+                **asdict(app_config.trading),
+                **override_trading_data
             })
+
+            # Create a new AppConfig instance with the updated trading config
+            # and all other default configurations.
+            current_app_config = AppConfig(
+                general=app_config.general,
+                exchange=app_config.exchange,
+                features=app_config.features,
+                labeling=app_config.labeling,
+                model=app_config.model,
+                notifier=app_config.notifier,
+                trading=new_trading_config
+            )
+            
             logger.info(f"Configuration overridden with JSON file from: {args.config_file}")
+            
         except FileNotFoundError as e:
             logger.critical(e, exc_info=True)
             sys.exit(1)
         except json.JSONDecodeError as e:
             logger.critical(f"Invalid JSON format in file {args.config_file}: {e}", exc_info=True)
             sys.exit(1)
-
     # Validate the final configuration
     try:
         validate_config(current_app_config)

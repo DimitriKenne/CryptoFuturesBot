@@ -4,7 +4,7 @@ from typing import Dict, Any, Optional, Literal
 # --- Sub-configs ---
 @dataclass
 class RiskConfig:
-    initial_capital: float = 95.0
+    initial_capital: float = 115.0
     risk_per_trade_pct: float = 5.0 # Percentage of capital to risk per trade
     leverage: int = 15
 
@@ -84,41 +84,41 @@ class TradingConfig:
         """
         Recursively creates a TradingConfig instance from a dictionary.
         
-        This method is designed to handle nested dataclasses, ensuring that a dictionary
-        input can be fully transformed into a valid, frozen TradingConfig object.
-        
         Args:
             data: A dictionary containing new configuration values.
             
         Returns:
             A new, frozen TradingConfig instance.
         """
-        # Dictionary to hold keyword arguments for the outer dataclass
         kwargs = {}
-        # Iterate over the fields of the dataclass
         for field_name, field_type in cls.__annotations__.items():
-            # Check if the field is a nested dataclass
-            # Note: We need to get the class from the field_type's argument if it's a field()
             actual_type = field_type.__args__[0] if getattr(field_type, '__origin__', None) is field else field_type
             
             if is_dataclass(actual_type):
-                # If it's a nested dataclass, recurse
-                if field_name in data and isinstance(data[field_name], dict):
-                    nested_data = data[field_name]
-                    # Get the default instance of the nested dataclass to merge
-                    default_instance = getattr(cls(), field_name)
-                    # Merge default values with provided overrides
-                    merged_data = {**default_instance.__dict__, **nested_data}
-                    kwargs[field_name] = actual_type.from_dict(merged_data)
+                if isinstance(data.get(field_name), dict):
+                    nested_data = data.get(field_name).copy()
+
+                    # Special handling for VolatilityRegimeConfig
+                    if actual_type.__name__ == 'VolatilityRegimeConfig':
+                        for key in ['max_holding_bars', 'allow_trading']:
+                            if key in nested_data and isinstance(nested_data[key], dict):
+                                try:
+                                    # Convert string keys to integers
+                                    nested_data[key] = {int(k): v for k, v in nested_data[key].items()}
+                                except (ValueError, TypeError) as e:
+                                    raise TypeError(f"Invalid key type in `{key}`. Keys must be convertible to integers. Error: {e}")
+
+                    # Use a specific from_dict method if it exists, otherwise instantiate
+                    if 'from_dict' in dir(actual_type):
+                        kwargs[field_name] = actual_type.from_dict(nested_data)
+                    else:
+                        kwargs[field_name] = actual_type(**nested_data)
                 else:
-                    # If not provided, use the default factory
                     kwargs[field_name] = field_type.default_factory() if 'default_factory' in str(field_type) else actual_type()
             else:
-                # For non-dataclass fields, just use the value from the dictionary or default
                 if field_name in data:
                     kwargs[field_name] = data[field_name]
                 else:
-                    # Get the default value from the class
                     kwargs[field_name] = getattr(cls(), field_name)
         
         return cls(**kwargs)
