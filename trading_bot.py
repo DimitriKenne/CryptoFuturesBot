@@ -36,13 +36,13 @@ logger = logging.getLogger(__name__)
 class TradingBot:
     """The main orchestrator for the live trading bot."""
 
-    def __init__(self, config: AppConfig, symbol: str, interval: str, model_type: str, mode: str, notifier: NotificationManager):
+    def __init__(self, config: AppConfig, symbol: str, interval: str, model_type: str, bot_mode: str, notifier: NotificationManager):
         self.logger = logging.getLogger(self.__class__.__name__)    
         self.config = config
         self.symbol = symbol
         self.interval = interval
         self.model_type = model_type
-        self.mode = mode
+        self.bot_mode = bot_mode # automatic or hybrid
         self.notifier = notifier
 
         self.is_running = False
@@ -54,12 +54,12 @@ class TradingBot:
         exchange_adapter = BinanceFuturesAdapter(app_config=config, symbol=self.symbol, logger=logging.getLogger(BinanceFuturesAdapter.__name__))
         market_data_handler = MarketDataHandler(app_config=config, mode='live', symbol=self.symbol, interval=self.interval, model_type=self.model_type)
         session_manager = LiveTradingSessionManager(app_config=config)
-        trade_execution_engine = TradeExecutionEngine(app_config=config, exchange_adapter=exchange_adapter, symbol=self.symbol)
+        trade_execution_engine = TradeExecutionEngine(app_config=config, exchange_adapter=exchange_adapter, symbol=self.symbol, mode="live")
 
         self.trade_cycle_processor = TradeCycleProcessor(
             data_manager, market_data_handler, exchange_adapter, 
             session_manager, trade_execution_engine, self.notifier,
-            self.model_type, self.symbol, self.interval, self.mode
+            self.model_type, self.symbol, self.interval, self.bot_mode
         )
         self.lifecycle_manager = LifecycleManager(
             data_manager, exchange_adapter, session_manager,
@@ -258,7 +258,7 @@ def main():
         symbol=args.symbol,
         interval=args.interval,
         model_type=args.model_type,
-        mode=args.mode,
+        bot_mode=args.mode,
         notifier=notifier,
     )
 

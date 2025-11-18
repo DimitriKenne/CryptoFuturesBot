@@ -22,7 +22,10 @@ class TradeExecutionEngine:
     without direct interaction with exchange APIs or data fetching.
     """
 
-    def __init__(self, app_config: AppConfig, symbol: str = None, exchange_adapter: Optional[ExchangeInterface] = None):
+    def __init__(self, app_config: AppConfig, 
+                 symbol: str = None,
+                 mode: str = 'backtesting',
+                 exchange_adapter: Optional[ExchangeInterface] = None):
         """
         Initializes the TradeExecutionEngine by extracting all necessary configuration
         parameters from the provided AppConfig object.
@@ -37,6 +40,7 @@ class TradeExecutionEngine:
         """
         self.logger = logging.getLogger(self.__class__.__name__)
         self.logger.info("Initializing TradeExecutionEngine...")
+        self.mode = mode.lower()
 
         # --- Configuration Parsing: Extracting relevant sub-configs ---
         self.risk_config = app_config.trading.risk
@@ -300,15 +304,33 @@ class TradeExecutionEngine:
                     exit_price_candidate = tp_price
                     return True, 'take_profit', self.trade_calculation_helpers._round_price(exit_price_candidate)
 
-        # --- 4. Max Holding Period Reached ---
+        # --- 4. Max Holding Period Reached (MODIFIED USING MODE) ---
         max_holding_bars = open_trade.get('max_holding_bars', 0)
         entry_bar_index = open_trade.get('entry_bar_index')
 
-        if max_holding_bars > 0 and entry_bar_index is not None:
-            if current_bar_index - entry_bar_index >= max_holding_bars:
-                self.logger.info(f"Max holding period of {max_holding_bars} bars reached. Exiting trade.")
-                exit_price_candidate = current_close
-                return True, 'max_holding', self.trade_calculation_helpers._round_price(exit_price_candidate)
+        # Only proceed if feature is enabled
+        if max_holding_bars > 0:
+            
+            calculated_entry_index = entry_bar_index # Start with the stored value
+
+            if self.mode == 'live':
+                # LIVE FIX: Normalize the entry index to 0 for relative bar counting.
+                # This fixes the issue caused by the shared entry method setting entry_bar_index to -1.
+                if calculated_entry_index is None or calculated_entry_index < 0:
+                    calculated_entry_index = 0
+                
+            elif self.mode == 'backtesting':
+                # BACKTESTING: Only proceed if the index is valid (i.e., not None or -1)
+                if calculated_entry_index is None or calculated_entry_index < 0:
+                    calculated_entry_index = None # Disables the check if backtesting indices are invalid
+            
+            # Execute the check: relies on current_bar_index >= 0 to indicate a valid index (sequential or proxy)
+            if calculated_entry_index is not None and current_bar_index >= 0:
+                if current_bar_index - calculated_entry_index >= max_holding_bars:
+                    self.logger.info(f"Max holding period of {max_holding_bars} bars reached. Exiting trade. Bars: {current_bar_index} - {calculated_entry_index}")
+                    exit_price_candidate = current_bar_data['close']
+                    return True, 'max_holding', self.trade_calculation_helpers._round_price(exit_price_candidate)
+
 
         # --- 5. Filtered Reversal Signal ---
         current_bar_signal = current_bar_data.get('signal')

@@ -210,14 +210,25 @@ def validate_label_strategy_2_config(config: LabelingStrategy2Config):
         raise ValueError("LabelingStrategy2Config: future_return_window must be a positive integer.")
 
 def validate_label_strategy_3_config(config: LabelingStrategy3Config):
-    if not isinstance(config.future_return_window, int) or config.future_return_window <= 0:
-        raise ValueError("LabelingStrategy3Config: future_return_window must be a positive integer.")
-    if not (0 <= config.long_ratio_quantile_pct <= 100):
-        raise ValueError("LabelingStrategy3Config: long_ratio_quantile_pct must be 0-100.")
-    if not (0 <= config.short_ratio_quantile_pct <= 100):
-        raise ValueError("LabelingStrategy3Config: short_ratio_quantile_pct must be 0-100.")
-    if not (0 <= config.min_profit_threshold_pct <= 100):
-        raise ValueError("LabelingStrategy3Config: min_profit_threshold_pct must be 0-100.")
+    """
+    Validates the configuration for Labeling Strategy 3 (HTF Volatility Filtered, Fixed R/R).
+    """
+    # 1. Validate volatility_quantile_pct (Must be 0-100)
+    if not isinstance(config.volatility_quantile_pct, (int, float)) or not (0 <= config.volatility_quantile_pct <= 100):
+        raise ValueError("LabelingStrategy3Config: volatility_quantile_pct must be a number between 0 and 100.")
+    
+    # 2. Validate take_profit_pct (Must be positive)
+    if not isinstance(config.take_profit_pct, (int, float)) or config.take_profit_pct <= 0:
+        raise ValueError("LabelingStrategy3Config: take_profit_pct must be a positive number.")
+    
+    # 3. Validate stop_loss_pct (Must be positive)
+    if not isinstance(config.stop_loss_pct, (int, float)) or config.stop_loss_pct <= 0:
+        raise ValueError("LabelingStrategy3Config: stop_loss_pct must be a positive number.")
+        
+    # 4. Validate htf_timeframe (Must be a non-empty string, e.g., '1h', '4h', '1d')
+    if not isinstance(config.htf_timeframe, str) or not config.htf_timeframe.strip():
+        raise ValueError("LabelingStrategy3Config: htf_timeframe must be a non-empty string representing a timeframe (e.g., '1d').")
+
 
 def validate_label_strategy_4_config(config: LabelingStrategy4Config):
     if not isinstance(config.n_clusters, int) or config.n_clusters <= 0:

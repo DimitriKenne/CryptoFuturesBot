@@ -35,6 +35,7 @@ class BotConfig(BaseModel):
     model_type: str
     symbol: str
     interval: str
+    bot_mode: str # NEW: Add bot_mode
     config_data: Dict[str, Any]
 
 @app.post("/bots/start")
@@ -62,8 +63,8 @@ async def start_bot_instance(bot_config: BotConfig):
             sys.executable,
             str(PROJECT_ROOT / "trading_bot.py"),
             "--config_file", str(config_file_path),
-            "--mode", "automatic",
-                        # --- CORRECTED: Added the missing arguments ---
+            "--mode", bot_config.bot_mode, # UPDATED: Use the mode from the request,
+            # --- CORRECTED: Added the missing arguments ---
             "--symbol", bot_config.symbol,
             "--interval", bot_config.interval,
             "--model_type", bot_config.model_type,
@@ -127,6 +128,10 @@ async def get_all_bot_statuses():
             logger.error(f"Could not read state for bot '{bot_id}': {e}")
             bot_state = {"error": "Could not read state"}
         
+         # --- START MODIFICATION ---
+        # Extract position and PnL information
+        current_position = bot_state.get("current_position", {}) # Use an empty dict if key is missing
+        
         statuses.append({
             "bot_id": bot_id,
             "pid": process.pid,
@@ -136,7 +141,11 @@ async def get_all_bot_statuses():
             "model_type": bot_info["model_type"],
             "symbol": bot_info["symbol"],
             "interval": bot_info["interval"],
+            # ADDED FIELDS FOR FRONTEND DISPLAY
+            "position_size": current_position.get("size", 0),
+            "unrealized_pnl": current_position.get("unrealized_pnl", 0.0), 
         })
+        # --- END MODIFICATION ---
     
     return statuses
 
@@ -167,5 +176,6 @@ if __name__ == "__main__":
     uvicorn.run(app, host="0.0.0.0", port=8000)
 
 
-# You must run the following command to start the server:# uvicorn 
-# utils.bot_management.backend_manager:app --reload 
+# You must run the following command to start the server:
+# uvicorn utils.bot_management.backend_manager:app --host 0.0.0.0 --port 8000
+# NOTE: Do NOT use --reload if you want running bots to persist config changes.

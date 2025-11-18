@@ -29,7 +29,7 @@ class TradeCycleProcessor:
         model_type: str,
         symbol: str,
         interval: str,
-        mode: str
+        bot_mode: str # automatic or hybrid
     ):
         self.data_manager = data_manager
         self.market_data_handler = market_data_handler
@@ -40,7 +40,7 @@ class TradeCycleProcessor:
         self.model_type = model_type
         self.symbol = symbol
         self.interval = interval
-        self.mode = mode  # 'automatic' or 'hybrid'
+        self.bot_mode = bot_mode  # 'automatic' or 'hybrid'
         self.last_processed_timestamp: Optional[datetime] = None
 
     def set_last_processed_timestamp(self, timestamp: Optional[datetime]):
@@ -67,7 +67,30 @@ class TradeCycleProcessor:
 
     async def _handle_exits(self, position: Dict[str, Any], candle_data: pd.Series):
         """Checks for an exit condition and executes the close if triggered."""
-        exit_triggered, reason, exit_price = self.trade_execution_engine.check_exit_conditions(position, candle_data, -1)
+        # --- NEW LOGIC FOR LIVE BAR COUNTING PROXY ---
+        entry_time = position.get('entry_time') # Must be stored during the entry workflow
+        if entry_time:
+            current_timestamp = candle_data.name.to_pydatetime()
+            time_diff = current_timestamp - entry_time
+            
+            # Assume self.interval (e.g., '5m') is available
+            try:
+                bar_duration = pd.to_timedelta(self.interval)
+            except Exception:
+                # Log error but let bar_duration remain None or skip calculation
+                bar_duration = None
+
+            if bar_duration and bar_duration.total_seconds() > 0:
+                # Calculate number of *full* bars elapsed (0 is the entry bar, 1 is the next, etc.)
+                current_bar_index = int(time_diff.total_seconds() / bar_duration.total_seconds())
+
+        # --- END NEW LOGIC ---
+        # Pass the calculated proxy to the engine
+        exit_triggered, reason, exit_price = self.trade_execution_engine.check_exit_conditions(
+            position, 
+            candle_data, 
+            current_bar_index
+        )
         if exit_triggered:
             logger.info(f"Exit triggered for position {position.get('trade_id', '<no-id>')} due to: {reason}")
             await self.execute_close_workflow(position, reason, exit_price)
@@ -236,10 +259,10 @@ class TradeCycleProcessor:
         trade_plan['trade_id'] = trade_id
         logger.info(f"New trade initiated with unique ID: {trade_id}")
         
-        if self.mode == "hybrid":
+        if self.bot_mode == "hybrid":
             confirmed = await self.hybrid_menu(trade_plan)
             if not confirmed:
-                logger.info("Trade entry rejected/skipped by user in hybrid mode.")
+                logger.info("Trade entry rejected/skipped by user in hybrid bot_mode.")
                 await self.notifier.send_notification(
                     "Trade entry rejected/skipped by user.", level="info"
                 )
@@ -297,7 +320,7 @@ class TradeCycleProcessor:
         )
 
     async def hybrid_menu(self, trade_plan: Dict[str, Any], timeout: int = 60):
-        """CLI menu for hybrid mode with timeout and input validation."""
+        """CLI menu for hybrid bot_mode with timeout and input validation."""
         import threading
 
         menu_text = (
@@ -327,7 +350,7 @@ class TradeCycleProcessor:
             f"TP: {trade_plan.get('take_profit_price')}\n"
             "Reply in terminal to approve or reject."
         )
-        logger.info("Trade proposal requires user approval (hybrid mode).")
+        logger.info("Trade proposal requires user approval (hybrid bot_mode).")
         await self.notifier.send_notification(notification_text, level="info")
 
         valid_responses = {'y', 'n', 'help', 'skip'}
@@ -357,13 +380,13 @@ class TradeCycleProcessor:
             )
             return False
         if response == 'y':
-            logger.info("Trade entry approved by user in hybrid mode.")
+            logger.info("Trade entry approved by user in hybrid bot_mode.")
             await self.notifier.send_notification(
                 "Trade entry approved by user.", level="info"
             )
             return True
         elif response == 'n' or response == 'skip':
-            logger.info("Trade entry rejected/skipped by user in hybrid mode.")
+            logger.info("Trade entry rejected/skipped by user in hybrid bot_mode.")
             await self.notifier.send_notification(
                 "Trade entry rejected/skipped by user.", level="info"
             )

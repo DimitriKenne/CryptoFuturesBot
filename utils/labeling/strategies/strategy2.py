@@ -71,19 +71,44 @@ class Strategy2(BaseLabelingStrategy):
         calculator: Any
     ) -> List[Tuple[str, Any]]:
         """Performs analysis for Strategy 2 and returns the plot figure."""
-        self.logger.info("Performing strategy-specific analysis for Strategy 2...")
+        self.logger.info("Performing strategy-specific analysis for Strategy 2 (Net Forward Return Quantile)...")
         if self._intermediate_analysis_df is None or self._intermediate_analysis_df.empty:
             self.logger.warning("No intermediate analysis data found for Strategy 2. Skipping analysis.")
             return []
 
+        # Convert to percentage for plotting (1.0 -> 100.0)
         df_net_returns = self._intermediate_analysis_df[['Net_Return_Long', 'Net_Return_Short']].dropna().copy()
         df_net_returns['Net_Return_Long'] *= 100.0
         df_net_returns['Net_Return_Short'] *= 100.0
 
         if df_net_returns.empty:
-            self.logger.warning("No valid net returns for plotting in Strategy 2.")
+            self.logger.warning("Net return data is empty. Skipping plotting.")
             return []
 
-        fig = plotter.plot_net_return_distributions(df_net_returns)
-        
-        return [("net_return_distributions", fig)]
+        # Define plot specifications for the two histograms (Long and Short Net Returns)
+        plot_specs = [
+            {
+                'column': 'Net_Return_Long',
+                'title': 'Net Return Long Distribution (%)',
+                'color': 'green',
+                'xlabel': f'Net Return Long (%) (Window: {self.future_return_window})',
+                # No quantile lines added here as the threshold is based on profitable returns only, 
+                # which cannot be accurately represented by a simple percentile of the full distribution.
+            },
+            {
+                'column': 'Net_Return_Short',
+                'title': 'Net Return Short Distribution (%)',
+                'color': 'red',
+                'xlabel': f'Net Return Short (%) (Window: {self.future_return_window})',
+                # No quantile lines added here for the same reason.
+            }
+        ]
+
+        # Use the consolidated plotting function
+        fig = plotter.plot_feature_distributions(
+            df_net_returns, 
+            plot_specs=plot_specs, 
+            symbol=df_original_input.index.name,
+            interval=f'{self.future_return_window}-bar' 
+        )
+        return [('net_return_distribution', fig)]

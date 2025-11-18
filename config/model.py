@@ -97,7 +97,7 @@ class ModelConfig:
     model_type: Literal['xgboost', 'random_forest', 'lstm'] = 'xgboost'
     features_to_use: Optional[List[str]] = None
     label_column: str = 'label'
-    train_test_split_ratio: float = 0.75
+    train_test_split_ratio: float = 0.8
     scaler_type: Optional[Literal['standard', 'minmax']] = 'minmax'
     
     # --- MODIFIED/ADDED SECTION ---

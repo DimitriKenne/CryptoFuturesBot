@@ -31,12 +31,13 @@ def get_default_config() -> Dict[str, Any]:
     """Dynamically converts the default TradingConfig dataclass to a dictionary."""
     return asdict(DEFAULT_TRADING_CONFIG)
 
-def start_bot(config_data: Dict[str, Any], symbol: str, interval: str, model_type: str):
+def start_bot(config_data: Dict[str, Any], symbol: str, interval: str, model_type: str, bot_mode: str="automatic"):
     """Sends a request to the backend service to start a new bot instance."""
     payload = {
         "model_type": model_type,
         "symbol": symbol,
         "interval": interval,
+        "bot_mode": bot_mode, # ADDED: Pass bot_mode to the backend
         "config_data": config_data,
     }
     try:
@@ -85,6 +86,13 @@ with form_col:
         "Model Type",
         options=["random_forest", "xgboost", "lstm"],
         index=0,
+    )
+    # NEW: Bot Mode selection
+    user_bot_mode = st.selectbox(
+        "Bot Mode",
+        options=["automatic", "hybrid"],
+        index=0,
+        help="Select 'automatic' for fully autonomous trading or 'hybrid' for a mode requiring user/external approval for trades."
     )
 
     # Use a text area for the full JSON configuration
@@ -135,27 +143,73 @@ with dashboard_col:
 
             df = pd.DataFrame(bots_status)
             
-            cols = st.columns([1, 1, 1, 1, 1, 1])
-            col_names = ["Bot ID", "PID", "Status", "Capital", "Last Update", "Action"]
+            # MODIFICATION 1: Update the number of columns (6 + 2 new columns = 8)
+            cols = st.columns([1, 1, 1, 1, 1, 1, 1, 1])
+            
+            # MODIFICATION 2: Update the column names
+            col_names = [
+                "Bot ID", "Symbol", "Status", 
+                "Capital", "Pos. Size", "Unrealized PnL", 
+                "Last Update", "Action"
+            ]
             for col, col_name in zip(cols, col_names):
                 col.write(f"**{col_name}**")
 
             for index, row in df.iterrows():
                 with st.container():
-                    cols = st.columns([1, 1, 1, 1, 1, 1])
+                    # MODIFICATION 3: Use 8 columns to match the header
+                    cols = st.columns([1, 1, 1, 1, 1, 1, 1, 1])
+                    
+                    # Format PnL for display, handling None/NaN
+                    unrealized_pnl = row.get('unrealized_pnl')
+                    if pd.isna(unrealized_pnl) or unrealized_pnl is None:
+                        pnl_display = "N/A"
+                        pnl_color = 'black'
+                    else:
+                        pnl_display = f"{unrealized_pnl:+.2f}" # Added '+' for positive PnL
+                        pnl_color = 'green' if unrealized_pnl > 0 else 'red' if unrealized_pnl < 0 else 'gray'
+
+
+                    # Col 0: Bot ID
                     cols[0].write(row['bot_id'])
-                    cols[1].write(row['pid'])
+                    
+                    # Col 1: Symbol/Interval (Combined for space)
+                    cols[1].write(f"{row['symbol']}/{row['interval']}")
+
+                    # Col 2: Status
                     cols[2].write(row['status'])
+
+                    # Col 3: Capital
                     cols[3].write(f"{row['current_capital']:.2f}" if row['current_capital'] is not None else "N/A")
-                    cols[4].write(row['last_update'] if row['last_update'] is not None else "N/A")
-                    if cols[5].button("Shutdown", key=f"shutdown_{row['bot_id']}"):
+
+                    # Col 4: Position Size
+                    pos_size = row.get('position_size', 0)
+                    cols[4].write(pos_size)
+                    
+                    # Col 5: Unrealized PnL (Applying color logic)
+                    cols[5].markdown(f":{pnl_color}[{pnl_display}]")
+
+                    # Col 6: Last Update
+                    cols[6].write(row['last_update'] if row['last_update'] is not None else "N/A")
+                    
+                    # Col 7: Action Button
+                    if cols[7].button("Shutdown", key=f"shutdown_{row['bot_id']}"):
                         shutdown_bot(row['bot_id'])
                         time.sleep(1)
-                        st.experimental_rerun()
+                        st.rerun()
             
         except requests.exceptions.RequestException as e:
             status_placeholder.error(f"Failed to connect to backend: {e}")
             
     update_dashboard()
+    
+    # MODIFICATION 4: Use st.rerun() instead of time.sleep(5) and st.rerun() together, 
+    # and rely on the Streamlit widget-based rerun mechanism for automatic updates.
+    # However, since you were using a 5-second sleep for a simple auto-refresh loop,
+    # I will stick to your pattern but use st.rerun() alone for cleaner logic.
     time.sleep(5)
     st.rerun()
+
+# How to run:
+# 1. Start the backend service (utils/bot_management/app.py).               
+# 2. Run this Streamlit app using: streamlit run utils/bot_management/app.py

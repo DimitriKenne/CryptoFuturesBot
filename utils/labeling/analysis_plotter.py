@@ -5,7 +5,7 @@ import numpy as np
 import logging
 import matplotlib.pyplot as plt
 import seaborn as sns
-from typing import Optional, TYPE_CHECKING, List, Tuple
+from typing import Any, Dict, Optional, TYPE_CHECKING, List, Tuple
 
 if TYPE_CHECKING:
     from matplotlib.figure import Figure
@@ -186,3 +186,125 @@ class AnalysisPlotter:
             figures.append((analysis_type, fig))
             
         return figures
+
+    
+    def plot_feature_distributions(
+        self,
+        df_data: pd.DataFrame,
+        plot_specs: List[Dict[str, Any]],
+        **kwargs
+    ) -> 'Figure':
+        """
+        Generates histograms (with KDE) of one or two feature distributions.
+        Can optionally mark quantile lines on the plots.
+        
+        Args:
+            df_data (pd.DataFrame): DataFrame containing the data.
+            plot_specs (List[Dict]): A list of dicts, one for each subplot (max 2).
+                                     Each dict must contain:
+                                     - 'column': str (The column name to plot)
+                                     - 'title': str
+                                     - 'color': str (e.g., 'green', 'red', 'skyblue')
+                                     - 'xlabel': str
+                                     Optional:
+                                     - 'label_upper_pct': float (Quantile percentage 0-100 to mark upper threshold)
+                                     - 'label_lower_pct': float (Quantile percentage 0-100 to mark lower threshold)
+            **kwargs: Additional keyword arguments like symbol and interval.
+
+        Returns:
+            Figure: The matplotlib figure object.
+        """
+        num_plots = len(plot_specs)
+        if num_plots == 0 or num_plots > 2:
+            self.logger.error(f"plot_feature_distributions called with {num_plots} specs. Must be 1 or 2.")
+            # Return an empty figure to prevent downstream errors
+            fig, ax = plt.subplots(figsize=(6, 6))
+            ax.set_title("Plot Error: Invalid number of plot specifications (must be 1 or 2).")
+            return fig
+        
+        symbol = kwargs.get('symbol', 'N/A')
+        interval = kwargs.get('interval', 'N/A')
+        fig, axes = plt.subplots(1, num_plots, figsize=(6 * num_plots, 6))
+        
+        # Ensure axes is iterable even if only one subplot
+        if num_plots == 1:
+            axes = [axes]
+
+        fig.suptitle(f'Feature Distributions\n{symbol} {interval}', fontsize=16)
+
+        for i, spec in enumerate(plot_specs):
+            ax = axes[i]
+            col = spec['column']
+            title = spec.get('title', col)
+            color = spec.get('color', 'skyblue')
+            xlabel = spec.get('xlabel', col)
+            label_upper_pct = spec.get('label_upper_pct')
+            label_lower_pct = spec.get('label_lower_pct')
+            
+            if col not in df_data.columns:
+                self.logger.error(f"Column '{col}' not found in DataFrame for plotting.")
+                ax.set_title(f"Error: {title}")
+                ax.text(0.5, 0.5, f"Column '{col}' missing.", ha='center', va='center')
+                continue
+
+            data_series = df_data[col].dropna()
+            if data_series.empty:
+                self.logger.warning(f"Data series for '{col}' is empty.")
+                ax.set_title(f"Empty Data: {title}")
+                ax.text(0.5, 0.5, "No data available.", ha='center', va='center')
+                continue
+
+            # 1. Filter extreme outliers for visualization clarity (0.1% to 99.9%)
+            p_low, p_high = data_series.quantile([0.001, 0.999])
+            plot_data = data_series[data_series.between(p_low, p_high)]
+            self.logger.debug(f"Filtered {len(data_series) - len(plot_data)} outliers for visualization for column {col}.")
+
+            # 2. Plot Distribution (Histogram with KDE)
+            sns.histplot(
+                plot_data, 
+                kde=True, 
+                ax=ax, 
+                color=color, 
+                bins=50, 
+                line_kws={'linewidth': 3},
+                label='Distribution'
+            )
+            
+            ax.set_title(title, fontsize=14)
+            ax.set_xlabel(xlabel, fontsize=12) 
+            ax.set_ylabel('Density/Frequency', fontsize=12)
+            ax.grid(axis='y', linestyle='--', alpha=0.7)
+            
+            # --- 3. Add Quantile Lines (Optional) ---
+            lines_added = []
+
+            # Upper Quantile Threshold
+            if label_upper_pct is not None and 0 < label_upper_pct <= 100:
+                quantile_value = data_series.quantile(label_upper_pct / 100.0)
+                ax.axvline(
+                    quantile_value, 
+                    color='green', 
+                    linestyle='--', 
+                    linewidth=2, 
+                    label=f'{label_upper_pct:.1f}th Pct ({quantile_value:.2f})'
+                )
+                lines_added.append(f"Upper ({label_upper_pct:.1f})")
+
+            # Lower Quantile Threshold
+            if label_lower_pct is not None and 0 <= label_lower_pct < 100:
+                quantile_value = data_series.quantile(label_lower_pct / 100.0)
+                ax.axvline(
+                    quantile_value, 
+                    color='red', 
+                    linestyle='--', 
+                    linewidth=2, 
+                    label=f'{label_lower_pct:.1f}th Pct ({quantile_value:.2f})'
+                )
+                lines_added.append(f"Lower ({label_lower_pct:.1f})")
+
+            if lines_added:
+                ax.legend(loc='upper right')
+
+        fig.tight_layout()
+        return fig
+

@@ -157,7 +157,7 @@ if __name__ == "__main__":
     parser = argparse.ArgumentParser(description='Generate trading labels from processed data.')
     parser.add_argument('--symbol', type=str, required=True, help='Trading pair symbol (e.g., BTCUSDT)')
     parser.add_argument('--interval', type=str, required=True, help='Time interval for candles (e.g., 5m, 1h)')
-    parser.add_argument('--labeling-strategy', type=str, required=True, choices=LABELING_STRATEGY_MAP.keys(), help='Labeling strategy to use.')
+    parser.add_argument('--labeling_strategy', type=str, required=True, choices=LABELING_STRATEGY_MAP.keys(), help='Labeling strategy to use.')
     args = parser.parse_args()
 
     try:

@@ -18,18 +18,22 @@ class LabelingStrategy1Config:
 @dataclass
 class LabelingStrategy2Config:
     """Net Forward Return Quantile labeling. All '_pct' fields are percentages (0-100)."""
-    quantile_threshold_long_pct: float = 25.0
-    quantile_threshold_short_pct: float = 25.0
-    future_return_window: int = 80
+    quantile_threshold_long_pct: float = 30.0
+    quantile_threshold_short_pct: float = 30.0
+    future_return_window: int = 150
     # return_type: Literal['log_returns', 'simple_returns'] = 'simple_returns'
 
 @dataclass
 class LabelingStrategy3Config:
-    """Future Range Dominance labeling. All '_pct' fields are percentages (0-100)."""
-    future_return_window: int = 150
-    long_ratio_quantile_pct: float = 50.0
-    short_ratio_quantile_pct: float = 50.0
-    min_profit_threshold_pct: float = 0.5     # e.g. 0.5 for 0.5%
+    """
+    HTF Volatility Filtered Labeling (Fixed R/R, Daily Expiration). (NEW STRATEGY)
+    1. Filters on HTF Volatility (Range).
+    2. Labels trades hitting fixed TP/SL percentage before HTF bar close.
+    """
+    volatility_quantile_pct: float = 30.0 # Only label LTF bars in HTF bars with volatility >= this percentile (0-100)
+    take_profit_pct: float = 3.0        # Fixed Take Profit barrier as percent (e.g. 2.0 for +2%)
+    stop_loss_pct: float = 1.0          # Fixed Stop Loss barrier as percent (e.g. 1.0 for -1%)
+    htf_timeframe: str = "1d"           # The High Time Frame to calculate volatility and expiry against
 
 @dataclass
 class LabelingStrategy4Config:
@@ -48,7 +52,7 @@ class LabelingStrategy5Config:
     """
     htf_timeframe: str = "1d"           # Higher timeframe, e.g. "1d" for daily
     bullish_quantile_pct: float = 50.0  # Quantile for bullish regime (e.g. 75 for 75th percentile)
-    bearish_quantile_pct: float = 35.0  # Quantile for bearish regime (e.g. 25 for 25th percentile)
+    bearish_quantile_pct: float = 50.0  # Quantile for bearish regime (e.g. 25 for 25th percentile)
 
 
 # --- Dynamically populate mapping of labeling strategy keys to their config dataclass types ---
@@ -72,7 +76,7 @@ class LabelConfig:
         'labeling_strategy_4',
         'labeling_strategy_5'
     ] = 'labeling_strategy_1'
-    min_holding_period: int = 1
+    min_holding_period: int = 5
 
     labeling_strategy_1: LabelingStrategy1Config = field(default_factory=LabelingStrategy1Config)
     labeling_strategy_2: LabelingStrategy2Config = field(default_factory=LabelingStrategy2Config)

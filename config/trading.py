@@ -4,8 +4,8 @@ from typing import Dict, Any, Optional, Literal
 # --- Sub-configs ---
 @dataclass
 class RiskConfig:
-    initial_capital: float = 115.0
-    risk_per_trade_pct: float = 5.0 # Percentage of capital to risk per trade
+    initial_capital: float = 500.0
+    risk_per_trade_pct: float = 1.0 # Percentage of capital to risk per trade
     leverage: int = 15
 
 @dataclass
@@ -18,18 +18,18 @@ class TradeExecutionConfig:
 @dataclass
 class EntryFilterConfig:
     confidence_filter_enabled: bool = True
-    confidence_threshold_long_pct: float = 60 # Confidence threshold for long entries (percentage)
-    confidence_threshold_short_pct: float = 60 # Confidence threshold for short entries (percentage)
+    confidence_threshold_long_pct: float = 30 # Confidence threshold for long entries (percentage)
+    confidence_threshold_short_pct: float = 30 # Confidence threshold for short entries (percentage)
     volatility_regime_filter_enabled: bool = False
     trend_filter_enabled: bool = False
     trend_filter_ema_period: int = 50
-    allow_long_trades: bool = True
+    allow_long_trades: bool = False
     allow_short_trades: bool = True
 
 @dataclass
 class VolatilityRegimeConfig:
-    max_holding_bars: Dict[int, int] = field(default_factory=lambda: {0: 300, 1: 200, 2: 150}) # Max holding bars per volatility regime
-    allow_trading: Dict[int, bool] = field(default_factory=lambda: {0: True, 1: True, 2: True}) # Allow trading per volatility regime
+    max_holding_bars: Dict[int, int] = field(default_factory=lambda: {0: 24, 1: 12, 2: 12}) # Max holding bars per volatility regime
+    allow_trading: Dict[int, bool] = field(default_factory=lambda: {0: False, 1: True, 2: True}) # Allow trading per volatility regime
 
 @dataclass
 class SLTPConfig:
@@ -40,7 +40,7 @@ class SLTPConfig:
     alpha_take_profit: float = 14.0 # Multiplier for ATR-based TP
     alpha_stop_loss: float = 5.0 # Multiplier for ATR-based SL
     min_sl_tp_pct: float = 1.0 # Minimum SL/TP distance as a percentage
-    max_holding_period_bars_default: Optional[int] = 300 # Default max holding if no regime applies
+    max_holding_period_bars_default: Optional[int] = 24 # Default max holding if no regime applies usually one day converted to the timeframe bars
 
 
 @dataclass
@@ -76,7 +76,7 @@ class TradingConfig:
     volatility_regime: VolatilityRegimeConfig = field(default_factory=VolatilityRegimeConfig)
     sltp: SLTPConfig = field(default_factory=SLTPConfig)
     backtest: BacktestConfig = field(default_factory=BacktestConfig)
-    bars_per_year: int = 105120 # Number of bars in a year for annualization
+    bars_per_year: int = 8760 # Number of bars in a year for annualization (105120 for 5m bars, 8760 for 1h bars, etc.)
     
     
     @classmethod
